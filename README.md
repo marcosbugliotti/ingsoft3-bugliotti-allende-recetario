@@ -1,4 +1,4 @@
-# ingsoft3-tp01-bugliotti
+# Proyecto IngSoft3 - versión B
 
 ## Instalación
 
