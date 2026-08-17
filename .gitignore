@@ -4,6 +4,10 @@ bin/
 obj/
 dist/
 build/
+__pycache__/
+*.pyc
+.venv/
+venv/
 
 # secretos: NUNCA se versionan
 .env
