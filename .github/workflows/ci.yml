@@ -1,7 +1,26 @@
 name: CI
-on: [pull_request]
+
+on:
+  pull_request:
+    branches: [main]      # ← el que hace el trabajo: verifica ANTES del merge
+  push:
+    branches: [main]      # ← sólo para que main tenga su corrida (la que lee el badge, §3.5)
+
 jobs:
-  build:
+  build-backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Qué estamos verificando
+        env:
+          RAMA: ${{ github.head_ref || github.ref_name }}
+        run: echo "Rama $RAMA · commit $GITHUB_SHA"
+
+      - name: Bajar el código al runner
+        uses: actions/checkout@v6
+
+      - name: Construir la imagen del backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend          # ajustá a donde esté TU Dockerfile
+          push: false                 # todavía no publicamos la imagen en ningún lado
+          tags: backend:ci            # el nombre de la imagen (hoy sólo vive dentro del runner)
