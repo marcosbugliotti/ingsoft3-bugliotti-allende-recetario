@@ -160,6 +160,9 @@ export default function RecipeDetailPage({ mode }) {
   if (editing) {
     return (
       <form onSubmit={handleSave} style={{ maxWidth: 480 }}>
+        <button type="button" onClick={() => navigate('/')}>
+          ← Volver
+        </button>
         <h1>{isNew ? 'Nueva receta' : 'Editar receta'}</h1>
         <div className="form-row">
           <label>Título</label>
@@ -239,13 +242,21 @@ export default function RecipeDetailPage({ mode }) {
 
   return (
     <div>
+      <button type="button" onClick={() => navigate('/')}>
+        ← Volver
+      </button>
       <h1>
         {recipe.title}{' '}
         <span className={`badge ${recipe.is_public ? 'public' : 'private'}`}>
           {recipe.is_public ? 'Pública' : 'Privada'}
         </span>
       </h1>
-      <p>{recipe.description}</p>
+      {recipe.description
+        .split('\n')
+        .filter((paragraph) => paragraph.trim().length > 0)
+        .map((paragraph, index) => (
+          <p key={index}>{paragraph}</p>
+        ))}
       <p>Tiempo de preparación: {recipe.prep_time_minutes} min</p>
 
       <div className="form-row" style={{ maxWidth: 200 }}>
