@@ -1,5 +1,7 @@
 # Recetario
 
+[![CI](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/workflows/ci.yml/badge.svg)](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/workflows/ci.yml)
+
 Aplicación full-stack para guardar, buscar y cocinar recetas propias: recetas públicas y privadas,
 escalado automático de ingredientes según las porciones que necesites, y checklist de ingredientes
 para cocinar. Proyecto del semestre para Ingeniería del Software 3 (UCC, 2026).
