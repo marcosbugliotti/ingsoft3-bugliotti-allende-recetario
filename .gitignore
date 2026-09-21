@@ -9,6 +9,13 @@ __pycache__/
 .venv/
 venv/
 
+# artefactos de tests y cobertura
+.coverage
+.pytest_cache/
+htmlcov/
+coverage.xml
+coverage/
+
 # secretos: NUNCA se versionan
 .env
 *.local
