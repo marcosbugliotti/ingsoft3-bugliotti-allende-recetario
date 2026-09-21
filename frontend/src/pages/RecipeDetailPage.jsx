@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api.js'
 import { useAuth } from '../context/AuthContext.jsx'
+import { buildRecipePayload, canPublishRecipe, scaleIngredients } from '../lib/recipes.js'
 
 function emptyRow() {
   return { key: Math.random().toString(36).slice(2), name: '', unit: '', quantity_base: '' }
@@ -62,21 +63,12 @@ export default function RecipeDetailPage({ mode }) {
     }
   }, [id, isNew, token])
 
-  // Mismo cálculo que hace el backend (app/routers/recipes.py::_build_recipe_out):
-  // cantidad_escalada = cantidad_base * porciones_deseadas / porciones_base.
   const scaledIngredients = useMemo(() => {
     if (!recipe) return []
-    const factor = servingsRequested / recipe.servings_base
-    return recipe.ingredients.map((i) => ({
-      ...i,
-      quantity_scaled: Math.round(i.quantity_base * factor * 100) / 100,
-    }))
+    return scaleIngredients(recipe.ingredients, recipe.servings_base, servingsRequested)
   }, [recipe, servingsRequested])
 
-  const canPublish =
-    title.trim().length > 0 &&
-    Number(prepTime) > 0 &&
-    rows.some((r) => r.name.trim() && Number(r.quantity_base) > 0)
+  const canPublish = canPublishRecipe({ title, prepTime, rows })
 
   function updateRow(key, patch) {
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
@@ -90,33 +82,16 @@ export default function RecipeDetailPage({ mode }) {
     setRows((prev) => prev.filter((r) => r.key !== key))
   }
 
-  async function resolveIngredientId(row) {
-    if (row.ingredientId) return row.ingredientId
-    const created = await api.createIngredient(
-      { name: row.name.trim(), unit: row.unit.trim() || 'u' },
-      token,
-    )
-    return created.id
-  }
-
   async function handleSave(e) {
     e.preventDefault()
     setSaving(true)
     setError('')
     try {
-      const validRows = rows.filter((r) => r.name.trim() && Number(r.quantity_base) > 0)
-      const ingredients = []
-      for (const row of validRows) {
-        const ingredient_id = await resolveIngredientId(row)
-        ingredients.push({ ingredient_id, quantity_base: Number(row.quantity_base) })
-      }
-      const payload = {
-        title: title.trim(),
-        description,
-        servings_base: Number(servingsBase),
-        prep_time_minutes: Number(prepTime),
-        ingredients,
-      }
+      const payload = await buildRecipePayload(
+        { title, description, servingsBase, prepTime, rows },
+        api,
+        token,
+      )
       const saved = isNew
         ? await api.createRecipe(payload, token)
         : await api.updateRecipe(id, payload, token)
