@@ -30,6 +30,50 @@ jobs:
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
+      - name: Construir la etapa de tests del backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          target: test
+          load: true
+          push: false
+          tags: backend-test:ci
+          cache-from: type=gha,scope=backend-test
+          cache-to: type=gha,mode=max,scope=backend-test
+
+      - name: Correr los tests del backend con cobertura
+        run: |
+          docker run --rm -v "${{ github.workspace }}/backend-coverage:/out" backend-test:ci
+
+      - name: Resumen del coverage del backend
+        if: ${{ !cancelled() }}
+        run: |
+          F=backend-coverage/coverage.xml
+          test -f "$F"
+          python3 -c "
+          import xml.etree.ElementTree as ET
+          root = ET.parse('$F').getroot()
+          if root.get('lines-valid') == '0':
+              print('midio 0 archivos: revisa el .coveragerc')
+              raise SystemExit(1)
+          linea = float(root.get('line-rate')) * 100
+          rama = float(root.get('branch-rate')) * 100
+          print('### Coverage del backend')
+          print('| métrica | % |')
+          print('|---|---|')
+          print(f'| líneas | {linea:.1f}% |')
+          print(f'| ramas | {rama:.1f}% |')
+          " >> $GITHUB_STEP_SUMMARY
+
+      - name: Publicar coverage y resultados del backend
+        uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-backend
+          path: |
+            backend-coverage/htmlcov
+            backend-coverage/junit.xml
+
   build-frontend:
     runs-on: ubuntu-latest
     steps:

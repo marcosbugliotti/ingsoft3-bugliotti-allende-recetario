@@ -15,6 +15,8 @@ venv/
 htmlcov/
 coverage.xml
 coverage/
+backend-coverage/
+frontend-coverage/
 
 # secretos: NUNCA se versionan
 .env
