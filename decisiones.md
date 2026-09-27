@@ -127,3 +127,47 @@ Usé Claude Code guiándome paso a paso sobre la guía del TP, adaptada a mi sta
 - Revisar mis logs de GitHub Actions con `gh run view --log` para confirmar si el cache realmente se estaba reutilizando (buscando la palabra `CACHED`), en vez de que yo mirara solo el tilde verde
 - Verificar el estado real de la protección de rama con `gh api .../branches/main/protection` antes y después de tocarla, para confirmar que no perdí la configuración del TP1.
 Verifiqué cada corrección volviendo a pedirle que releyera el log o la protección después de cada cambio, en vez de asumir que había quedado bien.
+
+## TP5 — Testing y calidad
+
+> Esta sección se va completando a medida que avanza el TP, no de una sola vez al final.
+
+### Qué se testeó y por qué (Tarea 1)
+
+Elegí testear las reglas de negocio reales de `recipes.py`, `ingredients.py`, `security.py` y `auth.py` — no los endpoints CRUD completos. La razón: un endpoint como `create_recipe` o `list_ingredients` sólo arma una consulta de SQLAlchemy y delega a funciones que ya están probadas una por una (`_build_recipe_out`, `_visible_or_404`, `_owned_or_403`, `_check_title_unique`, `_sync_ingredients`). Cubrir el endpoint completo mockeando toda la cadena del ORM (`.query().filter().join().all()`) no verifica que el query esté bien armado — el mock devuelve lo que yo le diga, así que sería "cobertura sin verificación". Probarlos de verdad requiere una base real, que es un test de integración: lo dejo para el TP7.
+
+Ejemplo concreto de una regla elegida por dónde duele un bug: la validación de `ingredient_id` en `_sync_ingredients` (`recipes.py:66-78`). No es sólo defensiva contra un `id` inventado: en la app hay una condición de carrera real — `delete_ingredient` sólo bloquea el borrado si el ingrediente ya está linkeado a una receta **guardada**; si tenés una edición sin guardar con un ingrediente que otra persona borra mientras tanto, al guardar tu receta el backend tiene que frenar con 400 en vez de guardar una referencia rota.
+
+### Coverage: qué entra en la cuenta y qué no
+
+Backend, en `backend/.coveragerc`. Queda afuera:
+- `app/main.py`: arranque — wiring de FastAPI, `include_router`, sin ninguna regla de negocio.
+- `app/database.py`: creación del engine y la sesión — plomería de conexión, sin reglas.
+- `app/models.py`: clases de datos de SQLAlchemy — sólo columnas y relaciones, sin comportamiento.
+- `app/config.py`: lectura de variables de entorno — sin reglas.
+
+Lo que **no** excluí, a propósito: los 6 endpoints CRUD de `recipes.py` e `ingredients.py` siguen contando en la cuenta aunque no tengan tests directos. Si los excluyera, el número dejaría de reflejar que esa parte del código no está verificada — sería "esconder lo que no testeé" en vez de "medir lo que importa" (la distinción que hace la propia guía).
+
+**Números reales medidos** (44 tests, con las exclusiones de arriba): 84,1% de línea, **79,2% de rama**, 83% combinado. La rama va bastante más atrás que la línea porque mide caminos de `if`, no sólo si la línea se ejecutó una vez.
+
+**Ejemplo propio de por qué coverage alto no garantiza calidad**: antes de excluir `models.py` y `config.py`, esos dos archivos figuraban al 98% y 100% de cobertura — no porque alguien haya escrito un test que verifique sus reglas, sino porque cualquier test que crea un `Recipe(...)` o que importa la app "toca" esas líneas de paso. `models.py` no tiene ninguna regla (son columnas), así que ese 98% no decía nada sobre la calidad de la app; sólo inflaba el número total y tapaba que `recipes.py` (donde sí hay reglas) estaba al 66%.
+
+**Umbral elegido: 80%**, sobre la métrica combinada (línea + rama). Con la medición real en 83%, deja margen para que una línea nueva sin tests lo rompa sin que cualquier cambio mínimo lo haga caer. Para subirlo haría falta testear los 6 endpoints CRUD que hoy quedan afuera, y eso implica la decisión de arriba: o se hace con integración real (TP7), o no cuenta como verificación genuina.
+
+**Por qué combinada y no línea y rama por separado.** La guía del ejemplo en .NET (coverlet) puede exigir las dos métricas por separado y frenar por la que quede más corta (`ThresholdType=line%2cbranch`) — es lo mismo que hace `thresholds: { lines, branches }` en vitest, que usamos en el frontend. `coverage.py`/`pytest-cov`, la herramienta de Python, no tiene ese modo: `--cov-fail-under` sólo puede compararse contra un único número, que quedó verificado empíricamente que es el combinado (probé `--cov-fail-under=84`, que está entre mi línea real de 84,1% y mi rama real de 79,2%, y falló mostrando "Total coverage: 83.28%" — o sea que evalúa la mezcla, no la línea sola). Replicar el comportamiento de coverlet/vitest exigiría un script propio que lea `coverage.xml` y compare línea y rama cada una contra su umbral, algo que no viene con la herramienta y que no agrega verificación real sobre lo que ya hace `--cov-fail-under`.
+
+Hay además un motivo práctico para no separarlas: mi rama hoy da 79,2%, por debajo de 80. Si el umbral exigiera "80% de rama" de forma independiente, el pipeline fallaría **hoy mismo, sin que se toque nada** — no por código nuevo sin tests, sino porque la métrica de rama arrancó más floja que la de línea. Eso rompería la demo del §3.5, que necesita que el freno se active recién cuando entra código nuevo sin cubrir. La combinada evita ese falso negativo y sigue siendo una medida honesta, porque mezcla ambas métricas en vez de ignorar la de rama.
+
+### El ejercicio de la rama sin cubierta
+
+- **Qué línea es**: `backend/app/routers/ingredients.py:15`, el `if search:` de `list_ingredients`.
+  ```python
+  def list_ingredients(search: str = "", db: Session = Depends(get_db)):
+      query = db.query(Ingredient)
+      if search:                                          # ← la rama sin cubrir
+          query = query.filter(Ingredient.name.ilike(f"%{search}%"))
+      return query.order_by(Ingredient.name).all()
+  ```
+  Ningún test llama a esta función, así que ninguno de los dos caminos del `if` se ejecuta nunca.
+- **Qué entrada la recorrería**: `search="harina"` recorre el camino verdadero (agrega el filtro); `search=""` (el valor por default) recorre el camino falso.
+- **Qué decidí**: no agregar el test. Es uno de los endpoints CRUD que decidí no cubrir (ver arriba): para probarlo de verdad haría falta mockear toda la cadena de SQLAlchemy, y eso no verificaría que el `ilike` funcione — sólo que el mock devuelve lo que le dije. Se prueba mejor con una base real en el TP7.
