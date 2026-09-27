@@ -1,0 +1,11 @@
+[run]
+branch = True
+source = app
+relative_files = True
+# Arranque y datos sin reglas de negocio: wiring de FastAPI, conexión a la
+# base, clases de datos de SQLAlchemy (sin comportamiento) y configuración.
+omit =
+    app/main.py
+    app/database.py
+    app/models.py
+    app/config.py
