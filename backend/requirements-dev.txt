@@ -1,3 +1,7 @@
 -r requirements.txt
 pytest==8.3.4
 pytest-cov==6.0.0
+# coverage 7.16.2 tiene un bug: --cov-fail-under imprime "FAIL" pero el exit code
+# queda en 0 (el build no se rompe). Verificado en 2026-09-28; 7.16.1 sí propaga el
+# exit code correcto. Fijar la version hasta confirmar que esta corregido en una mas nueva.
+coverage==7.16.1

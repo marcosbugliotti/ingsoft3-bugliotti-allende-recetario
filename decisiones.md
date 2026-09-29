@@ -171,3 +171,30 @@ Hay además un motivo práctico para no separarlas: mi rama hoy da 79,2%, por de
   Ningún test llama a esta función, así que ninguno de los dos caminos del `if` se ejecuta nunca.
 - **Qué entrada la recorrería**: `search="harina"` recorre el camino verdadero (agrega el filtro); `search=""` (el valor por default) recorre el camino falso.
 - **Qué decidí**: no agregar el test. Es uno de los endpoints CRUD que decidí no cubrir (ver arriba): para probarlo de verdad haría falta mockear toda la cadena de SQLAlchemy, y eso no verificaría que el `ilike` funcione — sólo que el mock devuelve lo que le dije. Se prueba mejor con una base real en el TP7.
+
+### Coverage del frontend: qué entra en la cuenta, y por qué es distinto del backend
+
+En `frontend/vite.config.js` uso `include: ['src/lib/**']`, no `omit`. Es la estrategia opuesta a la del backend, y no es antojo — depende de por qué cada parte quedó sin testear:
+
+- **Los endpoints CRUD del backend** los podría testear con las herramientas que ya tengo (`pytest` + `Mock`) — elegí no hacerlo porque mockear toda la cadena de SQLAlchemy no verifica nada real (la misma trampa del §2.4 de la guía). Es una decisión de calidad, no de falta de herramienta, así que los dejo **adentro** de la cuenta: el número tiene que reflejar esa deuda.
+- **Las pantallas del frontend** (`RecipeDetailPage.jsx`, `LoginPage.jsx`, etc.) no las puedo testear con lo que instalé este TP — hace falta `jsdom` + Testing Library, que la guía dice explícito que es *"opcional avanzado, no lo exige el TP"* (esa capa se prueba con e2e recién en el TP7). No es que decida no probarlas por comodidad: la herramienta para hacerlo no está en el alcance de esta materia todavía. Por eso las dejo **afuera** de la cuenta con `include`, en vez de contarlas "en rojo" por algo que no me corresponde resolver ahora.
+
+Con `include: ['src/lib/**']` mido 100% de línea, rama y funciones sobre `src/lib/recipes.js` (46 líneas, 18 ramas) — el único archivo con lógica propia, extraído de `RecipeDetailPage.jsx` en el PR #116. No es un número inflado: es real y motivado, porque el `include` acota la medición a la única carpeta que el TP me pide testear con unit tests.
+
+**Aclaración para que el número no se lea mal en la defensa**: que el front dé 100% y el back 83% no significa que el frontend esté "mejor probado" — significa que miden porciones distintas del código. Si el backend excluyera del mismo modo su capa de orquestación sin testear, también daría un número altísimo. La lógica de negocio en sí también pesa distinto: el backend es la autoridad real (JWT, contraseñas, autorización, integridad de datos); `src/lib/` del frontend es más liviano en responsabilidad (repite el cálculo de escalado para feedback instantáneo, valida el formulario para UX, arma el payload) — el backend vuelve a validar todo lo que importa de verdad.
+
+### Umbral del frontend
+
+**Elegido: 95%**, sobre línea, rama y funciones, cada una evaluada por separado (a diferencia del backend, acá `vitest` sí soporta umbrales independientes por métrica: `thresholds: { lines: 95, branches: 95, functions: 95 }`).
+
+No elegí 100% aunque la medición real de hoy sea 100/100/100. La razón: `src/lib/` es la carpeta que armé a propósito para separar lógica testeable de UI — la regla que quiero sostener de acá en adelante es "todo lo que entra a esta carpeta tiene que estar probado", no "hoy toca dar exacto 100". El 95% conserva prácticamente todo el rigor (con el ejemplo de abajo, agregar ~4 líneas y 1 `if` sin test hace caer la cobertura a ~90-92%, por debajo de 95 igual) y deja un colchón mínimo para algún caso borde legítimamente difícil de cubrir el día de mañana, sin ser tan laxo como para dejar pasar código nuevo sin ningún test.
+
+### Un bug real encontrado al verificar que el umbral rompe de verdad
+
+Antes de dar el umbral del backend por cerrado, no me alcanzó con que `--cov-fail-under=80` "pasara" con la medición de hoy — probé que **rompiera** de verdad subiéndolo artificialmente a 90% (contra una cobertura real de 83%) y revisando el *exit code* del proceso, no sólo el texto que imprime.
+
+Encontré que con `coverage==7.16.2` (la versión que `pip` resolvía por default, porque no la tenía fijada), `pytest` imprimía `FAIL Required test coverage of 90% not reached` — pero terminaba con **exit code 0**. Es decir: el mensaje decía que había fallado, pero el proceso le informaba al sistema que todo había salido bien. Como el `docker run` del pipeline sólo mira el exit code, no el texto, **el pipeline nunca se hubiera puesto rojo por cobertura baja, aunque el número fuera pésimo** — un freno de mentira.
+
+Fijé `coverage==7.16.1` en `requirements-dev.txt` (la versión que sí tenía instalada en mi máquina, y que confirmé que propaga el exit code correcto) y repetí la misma prueba: exit code 1, como corresponde. Verifiqué la corrección en Docker local antes de subirla, y después otra vez en la corrida real de GitHub Actions.
+
+**La lección, más allá del bug puntual**: un umbral que "parece" funcionar porque el texto dice `FAIL` no sirve de nada si el exit code no lo acompaña — hay que probar el mecanismo completo (número → exit code → paso de CI en rojo → merge bloqueado), no confiar en que un mensaje en pantalla implica que el resto de la cadena funciona.

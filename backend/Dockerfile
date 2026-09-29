@@ -11,7 +11,7 @@ RUN cp -a /install/. /usr/local/
 COPY requirements-dev.txt .
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY . .
-ENTRYPOINT ["pytest", "--cov", "--cov-report=term-missing", "--cov-report=xml:/out/coverage.xml", "--cov-report=html:/out/htmlcov", "--junitxml=/out/junit.xml"]
+ENTRYPOINT ["pytest", "--cov", "--cov-fail-under=80", "--cov-report=term-missing", "--cov-report=xml:/out/coverage.xml", "--cov-report=html:/out/htmlcov", "--junitxml=/out/junit.xml"]
 
 # ---- Etapa 3: runtime (sin pip ni cache de instalación) ----
 FROM python:3.12-slim AS final
