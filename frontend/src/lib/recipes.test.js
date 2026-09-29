@@ -19,6 +19,17 @@ describe('scaleIngredients', () => {
 
     expect(resultado.quantity_scaled).toBe(esperada)
   })
+
+  it.each([
+    ['porciones base en 0', 0, 4],
+    ['porciones base negativas', -1, 4],
+    ['porciones pedidas en 0', 4, 0],
+    ['porciones pedidas negativas', 4, -2],
+  ])('rechaza con %s', (_caso, porcionesBase, porcionesPedidas) => {
+    expect(() => scaleIngredients([{ quantity_base: 200 }], porcionesBase, porcionesPedidas)).toThrow(
+      'Las porciones deben ser mayores a 0',
+    )
+  })
 })
 
 describe('canPublishRecipe', () => {
