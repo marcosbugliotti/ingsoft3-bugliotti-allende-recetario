@@ -1,6 +1,9 @@
 // Mismo cálculo que hace el backend (app/routers/recipes.py::_build_recipe_out):
 // cantidad_escalada = cantidad_base * porciones_deseadas / porciones_base.
 export function scaleIngredients(ingredients, servingsBase, servingsRequested) {
+  if (servingsBase <= 0 || servingsRequested <= 0) {
+    throw new Error('Las porciones deben ser mayores a 0')
+  }
   const factor = servingsRequested / servingsBase
   return ingredients.map((i) => ({
     ...i,
