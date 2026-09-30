@@ -198,3 +198,32 @@ Encontré que con `coverage==7.16.2` (la versión que `pip` resolvía por defaul
 Fijé `coverage==7.16.1` en `requirements-dev.txt` (la versión que sí tenía instalada en mi máquina, y que confirmé que propaga el exit code correcto) y repetí la misma prueba: exit code 1, como corresponde. Verifiqué la corrección en Docker local antes de subirla, y después otra vez en la corrida real de GitHub Actions.
 
 **La lección, más allá del bug puntual**: un umbral que "parece" funcionar porque el texto dice `FAIL` no sirve de nada si el exit code no lo acompaña — hay que probar el mecanismo completo (número → exit code → paso de CI en rojo → merge bloqueado), no confiar en que un mensaje en pantalla implica que el resto de la cadena funciona.
+
+### El gate bloqueando un merge (Tarea 3, §3.5)
+
+Dos Pull Requests distintos, no dos commits del mismo — la guía marca esto en rojo como el error más común de esta parte: uno cuenta la historia completa y se mergea, el otro queda abierto y en rojo como prueba viva de que el freno funciona (la config de *required checks* sólo la ve quien administra el repo; un PR frenado lo puede comprobar cualquiera).
+
+**PR 1 — frontend, `scaleIngredients` (mergeado): [#119](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pull/119)**
+
+`scaleIngredients` no validaba `servingsBase`/`servingsRequested`: con `0` daba `Infinity` (división por cero), con negativos daba cantidades negativas — ningún `if` lo manejaba, así que ningún test lo detectaba. Es el mismo ejemplo que uso arriba para "por qué coverage alto no garantiza calidad", ahora convertido en la demo del gate.
+
+- Commit 1 (`fix`): agrega la validación **sin test**. Compiló bien, los 15 tests existentes siguieron pasando, pero la cobertura de rama cayó a 94,73% (umbral: 95%) → corrida roja: [`actions/runs/36615407738/job/109567025140`](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/36615407738/job/109567025140) — `ERROR: Coverage for branches (94.73%) does not meet global threshold (95%)`.
+- Commit 2 (`test`): agrega el `it.each` con los 4 casos inválidos que faltaban (porciones base y pedidas, en 0 y negativas). Cobertura de vuelta a 100% → corrida verde: [`actions/runs/36616134919/job/109569488786`](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/36616134919/job/109569488786) — 19 tests, 100% en las tres métricas.
+- Mergeado a `main`.
+
+**PR 2 — backend, validaciones de recetas (abierto, queda en rojo hasta la defensa): [#120](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pull/120)**
+
+Seis reglas reales que faltaban al crear/editar una receta (la más importante: `_sync_ingredients` no rechazaba ingredientes repetidos — antes de esto, mandar el mismo `ingredient_id` dos veces terminaba en un `IntegrityError` sin manejar al hacer `commit`, porque `recipe_ingredients` tiene `(recipe_id, ingredient_id)` como clave primaria compuesta; también límites de cantidad de ingredientes, cantidad por ingrediente, largo de título, no volver a publicar una receta ya pública, y despublicar sola una receta que una edición deja inválida). Ninguna tiene test, a propósito.
+
+El backend tiene más margen que el frontend (umbral 80% contra una medición real de 83%): una sola validación chica sólo movía el número ~0,4 puntos por vez, así que hizo falta juntar las seis para cruzar el umbral — de 83,28% a **79,09%**. Corrida roja real: [`actions/runs/36628922175/job/109612895321`](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/36628922175/job/109612895321) — `FAIL Required test coverage of 80% not reached. Total coverage: 79.09%`, 44 tests pasaron igual.
+
+Este PR se queda así — sin segundo commit, sin mergear — hasta la defensa.
+
+### Declaración de uso de IA
+
+Usé Claude Code como asistente durante todo el TP, siguiendo los pasos de la guía en el orden en que están (§3.0 a §3.5), adaptados a mi stack real (Python/FastAPI + pytest, React/Vite + vitest — no el .NET/xUnit/Moq/coverlet de los ejemplos, ni el vitest tal cual lo escribe la guía). Su rol concreto:
+
+- Escribir la implementación de los tests, backend y frontend, a partir de las reglas de negocio que yo le señalaba de mi propia app, siguiendo AAA y las tres técnicas que pide la Tarea 1 (parametrizado, caso de error, mock).
+- Traducir cada paso de la guía a los equivalentes reales de mi stack — `pytest-cov` en vez de `coverlet`, un script de `xml.etree` en vez de `ReportGenerator`, `unittest.mock` en vez de `Moq` — y explicarme en qué casos la traducción es literal y en cuáles cambia el mecanismo (por ejemplo, por qué mi umbral queda consolidado en un solo `ENTRYPOINT` del Dockerfile, en vez de partido entre el Dockerfile y el `docker run` como hace `coverlet` en .NET).
+
+Las decisiones fueron mías: qué reglas testear y por qué, los dos umbrales (80% backend, 95% frontend) y su justificación, qué queda afuera de la cuenta de cobertura, y el contenido de los dos PR de la demo del gate. Seguí el orden de la guía sección por sección (§3.1 → §3.2 → §3.3 → §3.4 → §3.5), sin saltear ningún paso ni dar por bueno un resultado sin verlo confirmado en una corrida real.
