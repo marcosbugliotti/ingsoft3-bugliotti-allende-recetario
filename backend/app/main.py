@@ -17,3 +17,9 @@ app.include_router(ingredients.router)
 @app.get("/health")
 def health():
     return {"status": "ok", "commit": os.environ.get("RENDER_GIT_COMMIT", "local")}
+
+
+@app.get("/api/version")
+def version():
+    commit = os.environ.get("RENDER_GIT_COMMIT", "local")
+    return {"commit": commit[:7] if commit != "local" else commit}
