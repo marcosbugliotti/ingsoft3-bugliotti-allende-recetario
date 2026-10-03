@@ -11,10 +11,15 @@ server {
     # Todo lo que llegue a /api se reenvia al backend por la red interna de compose.
     # El nombre va en una variable (no en el proxy_pass directo) para que nginx lo
     # resuelva recien cuando llega un pedido, no al arrancar.
-    resolver 127.0.0.11 valid=10s ipv6=off;
-    set $backend_api http://backend:8000;
+    #
+    # La direccion del backend y el DNS llegan por variables de entorno: en compose,
+    # el nombre del servicio y el DNS de Docker; en Render, la URL de la api de ESTE
+    # entorno y un DNS publico.
+    resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+    set $backend_api ${BACKEND_URL};
 
     location /api/ {
         proxy_pass $backend_api;
+        proxy_ssl_server_name on;   # la api de Render es https: sin esto el TLS no sabe a que host va
     }
 }

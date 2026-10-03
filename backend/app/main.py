@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 
 from app.database import Base, engine
@@ -14,4 +16,4 @@ app.include_router(ingredients.router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "commit": os.environ.get("RENDER_GIT_COMMIT", "local")}
