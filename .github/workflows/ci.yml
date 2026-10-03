@@ -45,6 +45,7 @@ jobs:
           F=backend-coverage/coverage.xml
           test -f "$F"
           python3 -c "
+          import json
           import xml.etree.ElementTree as ET
           root = ET.parse('$F').getroot()
           if root.get('lines-valid') == '0':
@@ -52,11 +53,14 @@ jobs:
               raise SystemExit(1)
           linea = float(root.get('line-rate')) * 100
           rama = float(root.get('branch-rate')) * 100
+          with open('backend-coverage/coverage.json') as f:
+              total = json.load(f)['totals']['percent_covered']
           print('### Coverage del backend')
           print('| métrica | % |')
           print('|---|---|')
           print(f'| líneas | {linea:.1f}% |')
           print(f'| ramas | {rama:.1f}% |')
+          print(f'| total (umbral 80%) | {total:.1f}% |')
           " >> $GITHUB_STEP_SUMMARY
 
       - name: Publicar coverage y resultados del backend
