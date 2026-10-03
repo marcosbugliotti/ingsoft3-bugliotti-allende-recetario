@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import RecipeListPage from './pages/RecipeListPage.jsx'
 import RecipeDetailPage from './pages/RecipeDetailPage.jsx'
+import Footer from './Footer.jsx'
 
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuth()
@@ -45,6 +46,8 @@ export default function App() {
           <Route path="/recipes/:id" element={<RecipeDetailPage mode="view" />} />
         </Routes>
       </main>
+
+      <Footer />
     </div>
   )
 }
