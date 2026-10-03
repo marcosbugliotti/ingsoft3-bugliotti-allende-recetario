@@ -227,3 +227,89 @@ Usé Claude Code como asistente durante todo el TP, siguiendo los pasos de la gu
 - Traducir cada paso de la guía a los equivalentes reales de mi stack — `pytest-cov` en vez de `coverlet`, un script de `xml.etree` en vez de `ReportGenerator`, `unittest.mock` en vez de `Moq` — y explicarme en qué casos la traducción es literal y en cuáles cambia el mecanismo (por ejemplo, por qué mi umbral queda consolidado en un solo `ENTRYPOINT` del Dockerfile, en vez de partido entre el Dockerfile y el `docker run` como hace `coverlet` en .NET).
 
 Las decisiones fueron mías: qué reglas testear y por qué, los dos umbrales (80% backend, 95% frontend) y su justificación, qué queda afuera de la cuenta de cobertura, y el contenido de los dos PR de la demo del gate. Seguí el orden de la guía sección por sección (§3.1 → §3.2 → §3.3 → §3.4 → §3.5), sin saltear ningún paso ni dar por bueno un resultado sin verlo confirmado en una corrida real.
+
+## TP6 — CD: environments, aprobaciones y deployment patterns
+
+### Enlaces de este TP
+
+- **Paquetes públicos** (descargables sin credenciales):
+  [`-backend`](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pkgs/container/ingsoft3-bugliotti-allende-recetario-backend) ·
+  [`-frontend`](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pkgs/container/ingsoft3-bugliotti-allende-recetario-frontend)
+- **La cadena del §3.0**:
+  1. [Corrida de un PR](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/37131487068/job/111227321145) con los tests en verde y el paso "Entrar al registry" **salteado** (evento `pull_request`, no publica).
+  2. [Corrida de `main`](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/36805359201/job/110188368120) donde "Construir y publicar la imagen del backend" es el **último** paso del job, después de los tests.
+- **URLs vivas**: QA — [api](https://recetario-api-qa.onrender.com) · [front](https://recetario-front-qa.onrender.com). PROD — [api](https://recetario-api-prod.onrender.com) · [front](https://recetario-front-prod.onrender.com).
+- **El gate humano, las dos corridas**: [rechazo](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/37136413028) con motivo · [aprobación](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/37138121841) con el flujo completo QA→PROD.
+
+### 1. Por qué el artefacto se publica solo con la verificación en verde
+
+La garantía no sale de un control nuevo: sale de encadenar tres cosas que ya tenía del TP4/TP5. Nada entra a `main` sin el pipeline en verde (el gate del TP4 más el umbral de cobertura del TP5). Solo lo que entra a `main` publica (`push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}` en los dos jobs de build). Y el paso que publica es el **último** del mismo job que corrió los tests — si algo falla antes, el job muere y ese paso nunca llega a correr. Lo verifiqué de las dos formas que pide la Tarea 1 y no de una sola: con una corrida de PR donde el login al registry queda salteado (prueba el segundo eslabón), y con el orden real de los pasos de una corrida de `main` (prueba el tercero, que es el que realmente distingue un pipeline bien armado de uno que publica antes de testear).
+
+Si se publicara igual cuando los tests fallan, "está en ghcr.io" dejaría de significar "esto pasó la verificación" — el registry pasaría a ser un depósito de lo que alguna vez se construyó, no de lo que se puede confiar en desplegar.
+
+### 2. Continuous Delivery, no Continuous Deployment
+
+Implementé Continuous Delivery: todo cambio verificado llega automáticamente hasta QA, pero a PROD no llega solo — hace falta mi aprobación manual explícita. Me corresponde a este contexto por dos motivos. Primero, de madurez: tengo 44 tests de backend y 19 de frontend cubriendo reglas de negocio, pero ni e2e ni monitoreo todavía (eso es TP7/TP9) — sin esa red de seguridad completa, sacar al humano del todo sería automatizar la propagación de un error que mis tests no alcanzan a ver. Segundo, porque el trabajo es individual: no hay otra persona que revise el cambio antes de que llegue a producción, así que la aprobación manual es el único punto donde alguien (yo, con otra cabeza puesta, mirando la evidencia en vez de escribiendo el código) para a preguntarse "¿esto está listo?" antes de que lo vea cualquiera que abra la app.
+
+Lo que me faltaría para Continuous Deployment de verdad: e2e contra un entorno real (TP7), observabilidad que avise sola si algo se rompe después del deploy (TP9), y feature flags para poder apagar algo sin redesplegar si igual se cuela un bug. Hoy no lo querría ni con todo eso — prefiero mantener el gate humano en PROD mientras trabajo solo, porque es también donde practico la disciplina de "qué miro antes de aprobar" (§4).
+
+### 3. El diseño de la cadena: `needs`/`if`/environments y el alcance de los secrets
+
+`deploy-qa` depende de `[build-backend, build-frontend]` y lleva `if: github.ref == 'refs/heads/main'` — así un PR corre los tests pero nunca dispara un deploy. `deploy-prod` depende solo de `deploy-qa` y **no repite** el `if` de rama: no hace falta, porque si `deploy-qa` no corrió (por no ser push a `main`), `deploy-prod` tampoco puede correr — la condición se hereda por la cadena de `needs`, repetirla sería redundante.
+
+Los secrets de los deploy hooks (`RENDER_HOOK_API_QA`, `RENDER_HOOK_FRONT_QA`, `RENDER_HOOK_API_PROD`, `RENDER_HOOK_FRONT_PROD`) viven en el **environment** correspondiente, no en el repo: un job con `environment: qa` no puede leer los de `production` y viceversa. Si alguien comprometiera el job de QA, no tendría forma de disparar un deploy a PROD con esos secrets — el alcance de cada uno está limitado a lo que ese entorno necesita, ni más.
+
+### 4. Qué mira mi aprobador antes de aprobar
+
+Para que el gate no sea un click automático, me puse criterios concretos antes de aprobar: que `deploy-qa` haya dado verde (smoke test pasó: API, base y front respondiendo), haber navegado yo mismo el cambio en la URL de QA, y que el diff no toque el esquema de la base ni agregue dependencias nuevas sin revisar. El texto real que escribí al aprobar el deploy del footer/ícono de entorno:
+
+> "QA está verde y probé el footer/ícono de entorno ahí mismo: cambia bien de olla a plato según el host y el commit coincide con /api/version. Sin cambios de lógica de negocio ni de esquema de base. Apruebo el deploy a producción."
+
+Y el rechazo real, con un motivo mío y específico (no el de ejemplo de la guía), sobre el primer deploy a PROD que armé (el gate humano en sí):
+
+> "No es el momento correcto para subirlo a producción a los cambios."
+
+Fue un rechazo deliberado: quise comprobar primero que el botón "Reject" realmente frena el job (no solo lo demora) y que el motivo queda registrado en el historial del run, antes de aprobar ningún deploy real. Es la misma idea del §2.4: la aprobación "compra" timing de negocio, no solo verificación técnica — y un gate que nunca rechaza no se puede distinguir de uno que no existe.
+
+### 5. La letra chica del free tier
+
+El cold start es real y lo vi en la primera corrida de `deploy-qa`: el primer intento del smoke test dio `curl: (28) Operation timed out after 10002 milliseconds` (el `--max-time 10` cortándolo antes de que el runner se cuelgue), y el segundo intento, 20 segundos después, ya respondió `{"status":"ok"}`. Sin el loop de reintentos, ese primer timeout hubiera tumbado el deploy entero por un falso negativo — el servicio no estaba roto, estaba despertando.
+
+Las otras dos letras chicas que tengo presentes para no quedarme sin presupuesto antes de la defensa: las 750 horas de instancia son del **workspace**, no por servicio — mis 4 servicios duermen a los 15 min sin tráfico, así que en uso normal no debería gastarlas todas, pero lo voy a revisar en *Workspace → Billing* antes de P2. Y los 500 minutos de build mensuales del workspace: cada promoción QA→PROD de este TP reconstruye 4 veces (back y front, en los dos entornos), así que varios ciclos de prueba seguidos los consumen rápido.
+
+### 6. Qué garantía pierdo porque Render reconstruye en vez de ejecutar mi imagen
+
+Mi pipeline publica una imagen en ghcr.io etiquetada con el commit exacto que pasó los tests (§1). Pero Render, en este TP, **no corre esa imagen** — el deploy hook le pide que reconstruya el mismo commit desde mi repo, con su propio build de Docker. Aunque el código fuente sea idéntico, los *bytes* resultantes pueden no serlo: si una dependencia de `requirements.txt` o `package.json` sacó una versión nueva entre que corrió mi pipeline y que corrió el build de Render, o si cambió la imagen base (`python:3.12-slim`, `node:22-alpine`), el mismo commit puede producir una imagen distinta a la que mis tests verificaron.
+
+Por eso, aunque mi `/health` devuelva el `RENDER_GIT_COMMIT` y pueda confirmar "el código correcto está desplegado", eso **no es lo mismo** que "el artefacto que verifiqué está corriendo" — son dos afirmaciones distintas, y hoy solo puedo sostener la primera. Cerrar la segunda es exactamente lo que hace el TP7, desplegando la imagen real del registry en vez de reconstruir.
+
+### 7. Qué prueba mi smoke test y qué no
+
+Prueba tres cosas encadenadas con `&&`: que `/health` responde (proceso vivo), que `/api/ingredients` responde (la base conecta — un `/health` que no toca la base podría dar verde con la connection string rota), y que el front sirve algo en `/`. Lo que **no** prueba: que el código desplegado sea el mismo artefacto verificado (§6), que las rutas que requieren login funcionen (no autentico en el smoke), ni que el `/api/` del front llegue de verdad al backend correcto — eso último lo verifiqué a mano la primera vez, navegando la URL de QA y creando una receta de prueba, no con el smoke automático.
+
+### 8. Deployment pattern y plan de rollback
+
+**Para una producción real con usuarios** elegiría **blue-green**: mi app no tiene estado en los contenedores (la base vive aparte, en Neon), así que tener dos entornos completos y cambiar el router de uno a otro es barato de implementar y me da rollback instantáneo con solo revertir el switch — más valioso que el costo de 2× infraestructura para una app chica como esta. Descarté canary porque requiere observabilidad que no tengo (TP9): sin métricas en vivo que digan "el canario está sangrando", repartir tráfico entre dos versiones es decidir a ciegas. Feature flags los usaría **además**, no en lugar de blue-green, para separar el riesgo de desplegar código del riesgo de mostrarlo — por ejemplo, para probar una función como "recetas sugeridas" en PROD apagada, antes de prenderla para todos.
+
+**Mi rollback actual** es redesplegar el commit anterior conocido: disparar los mismos deploy hooks de PROD con `&ref=<sha-del-deploy-bueno-anterior>` en vez del SHA nuevo — el mismo mecanismo que uso para desplegar, apuntado hacia atrás. Lo medí de verdad, no lo estimé: **[PENDIENTE — completar después de la prueba en vivo]**. Lo que el rollback de código **no** deshace: si un cambio futuro incluyera una migración que borra una columna, volver el código atrás no resucita esa columna — para eso hace falta un plan de rollback de datos aparte, que hoy no tengo porque no desplegué ningún cambio de esquema todavía.
+
+### 9. El footer e ícono de entorno (mejora propia)
+
+Agregué un endpoint `/api/version` (separado de `/health`, que ya usa el smoke test) y un footer en el frontend que muestra, por entorno, un ícono de comida (🧑‍🍳 local, 🥘 QA, 🍽️ PROD — y el mismo ícono como favicon de la pestaña) con el commit corriendo. La decisión de diseño fue a propósito: no quiero que cualquier visitante de PROD vea esta información todo el tiempo (no es grave, pero tampoco hace falta regalarla), así que el texto con el commit queda oculto por default y solo aparece con un triple click sobre el ícono — accesible para mí en la defensa, invisible para un usuario normal.
+
+### Problemas encontrados y cómo los resolví
+
+- **Un servicio de Render quedó con la URL vieja después de renombrarlo.** El campo "Name" de Render es solo una etiqueta del dashboard — no regenera el subdominio `.onrender.com`, que queda fijo al que se creó la primera vez. Lo noté porque el dashboard decía "recetario-front-prod" pero la URL pública seguía siendo la del nombre por default del repo. Lo resolví borrando ese servicio y recreándolo con el nombre correcto puesto *antes* del primer deploy.
+- **A punto de taggear con un commit que no existía.** Vi en una captura del video de la guía el comando `gh api 'repos/{owner}/{repo}/deployments?environment=production'` y por un momento pensé que ya lo había corrido yo. Antes de pushear el tag, verifiqué el SHA contra `git log` y la API de GitHub — no existía en mi repo, así que `git tag` lo hubiera rechazado solo. Confirmé que efectivamente no se había creado ningún tag con ese commit, y corrí el comando real parado en mi propio repo para sacar el SHA correcto (`13cb4155c92c3b13ded059ccd6d99b80bd9d87c6`, el que de verdad está en Deployments de `production`).
+- **El resumen de coverage del backend no mostraba el número que realmente frena el build.** Mi tabla del summary solo parseaba `line-rate` y `branch-rate` del `coverage.xml` (Cobertura), que son dos métricas separadas — pero `--cov-fail-under=80` evalúa un **total combinado** que no está en ese XML. Lo resolví agregando `--cov-report=json` al `ENTRYPOINT` del Dockerfile y leyendo `totals.percent_covered` de ese JSON, que es exactamente el número que decide pasa/falla.
+
+### Declaración de uso de IA
+
+Usé Claude Code durante todo este TP, con un rol más de pair-programming hablado que de "hacé esto": le explicaba qué quería lograr y por qué, y revisábamos juntos cada paso antes de aplicarlo. Su rol concreto:
+
+- Explicarme la diferencia entre CD y Continuous Deployment, los deployment patterns y por qué el orden del `ci.yml` (build final al final del job) es lo que hace cierta la frase "el artefacto sale solo si la verificación pasó" — no un `if` explícito, sino el orden de los pasos.
+- Verificar cada paso contra el estado real con `gh`/`curl`/Docker local en vez de confiar en lo que yo describía que veía en pantalla — por ejemplo, confirmando con `curl` contra mis URLs de Render que el commit desplegado coincidía con el aprobado, en vez de asumirlo.
+- Implementar conmigo las mejoras del footer/ícono de entorno y el fix del coverage, discutiendo antes el diseño (por qué ocultar el commit en PROD, por qué un ícono y no texto) y solo después escribiendo el código.
+- Ayudarme a redactar esta sección de `decisiones.md`, a partir de los links, SHAs y comentarios reales que fuimos juntando durante el TP (no inventados después de memoria).
+
+Las decisiones fueron mías: qué deployment pattern elegir y por qué, los criterios de aprobación del gate, el motivo del rechazo, y el diseño del footer. Verifiqué cada corrección pidiendo que confirmara contra el estado real del repo/Render/Neon, no contra lo que "debería" haber pasado según la guía.
