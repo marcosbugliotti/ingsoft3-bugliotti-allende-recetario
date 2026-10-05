@@ -315,3 +315,95 @@ Usé Claude Code durante todo este TP, con un rol más de pair-programming habla
 - Ayudarme a redactar esta sección de `decisiones.md`, a partir de los links, SHAs y comentarios reales que fuimos juntando durante el TP (no inventados después de memoria).
 
 Las decisiones fueron mías: qué deployment pattern elegir y por qué, los criterios de aprobación del gate, el motivo del rechazo, y el diseño del footer. Verifiqué cada corrección pidiendo que confirmara contra el estado real del repo/Render/Neon, no contra lo que "debería" haber pasado según la guía.
+
+## TP7 — Contenedores en el pipeline + integración y e2e
+
+### Enlaces de este TP
+
+- **Paquetes públicos**, con la etiqueta del último commit en `main` al momento de escribir esto (`sha-d1cabd3dbcf7f6e65d2e3ad82775bde6c57b7b30`):
+  [`-backend`](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pkgs/container/ingsoft3-bugliotti-allende-recetario-backend) ·
+  [`-frontend`](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pkgs/container/ingsoft3-bugliotti-allende-recetario-frontend)
+- **Los entornos ejecutando la imagen (§3.2)**: el commit `ac87ffae9789a2ac27198dfee154a1d778b433a3` (PR [#129](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pull/129)) cambió `deploy-qa`/`deploy-prod` de `&ref=` a `imgURL`. [Corrida de ese merge](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/37224046929) con los 4 servicios desplegando por `imgURL`.
+- **Las dos suites (§3.3)**: PR [#130](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pull/130), `frontend/e2e/api.spec.js` (5 pruebas de integración) y `frontend/e2e/recetas.spec.js` (3 flujos e2e).
+- **La corrida completa en verde, antes de romper nada**: [run 37255744997](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/37255744997) — `build → deploy-qa → integracion → e2e → deploy-prod`, los 6 jobs en verde.
+- **El par que diagnostica (§3.4, la evidencia central)**: el commit `4205ecb8188af97f2d4df17770a5d1cfedbf89ad` (PR [#131](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pull/131)) rompió el front a propósito (detalle en §6). [Corrida roja](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/37256820547): `integracion` ✅ verde, `e2e` ❌ rojo, `deploy-prod` ni se muestra como pendiente de aprobación. Los dos reportes de esa corrida, como artefactos: `playwright-report-integracion` (verde) y `playwright-report-e2e` (rojo) — descargables desde esa misma página de *Actions*.
+- **El fix y la corrida completa en verde posterior**: commit `d1cabd3dbcf7f6e65d2e3ad82775bde6c57b7b30` (PR [#132](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/pull/132)). [Corrida verde](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/37258212042) completa, hasta PROD.
+- **URLs vivas**: las mismas del TP6 — QA — [api](https://recetario-api-qa.onrender.com) · [front](https://recetario-front-qa.onrender.com). PROD — [api](https://recetario-api-prod.onrender.com) · [front](https://recetario-front-prod.onrender.com).
+- **Release `v7.0.0`**: *pendiente — se agrega en cuanto tague, sobre el commit que `Deployments` marque como el real en `production`, no necesariamente `d1cabd3`.*
+
+### 1. Build once, deploy many: qué resuelve, con mi propio ejemplo
+
+En el TP6 (§6 de esa sección) ya había dejado anotado el problema sin resolver: mi `/health` podía confirmar "el código correcto está desplegado" (el commit coincide), pero no "el artefacto que verifiqué está corriendo" — porque Render reconstruía el mismo commit en cada entorno, con su propio build de Docker, en un momento distinto. Dos builds del mismo código no garantizan los mismos bytes: si entre que corrió mi pipeline y que corrió el build de Render salió una versión nueva de una dependencia de `requirements.txt`, o cambió `python:3.12-slim`, el resultado podía diferir.
+
+Con `imgURL` eso se cierra: el pipeline construye la imagen **una sola vez**, la publica con el tag del commit, y tanto QA como PROD reciben la orden explícita de ejecutar *esa* imagen — no de reconstruirla. Lo verifiqué de forma muy concreta en el primer deploy manual del front de QA (§3.2 de la guía, antes de tocar el pipeline): cambié la fuente a *Existing Image*, y la app **no cambió** hasta que corrí el `curl` con `imgURL` a mano — ahí vi en *Events* "Triggered via Deploy Hook" con el tag `sha-3d896b0e...`, y recién ahí la app reflejó esa imagen. Esa separación entre "cambiar la fuente" y "desplegar" es la prueba de que ya no hay ningún build de por medio.
+
+### 2. Estrategia de etiquetas
+
+`sha-<commit>` en el registry identifica **qué código generó esa imagen**, de forma trazable y verificable con `docker pull` desde cualquier máquina, sin sesión — lo comprobé en el checkpoint de §3.1 antes de tocar Render. Mi pipeline no publica `latest` a propósito: si lo hiciera, cualquier deploy que lo nombrara correría "lo último que se subió", sin importar si pasó las e2e o no — con una sola etiqueta por imagen no hay forma de desplegar algo sin decir exactamente qué es.
+
+Los 4 servicios de Render quedaron configurados en *Settings → Image* con la imagen del commit `3d896b0ee9791226fe3e9a488a7a0830eb731e96` (el que estaba en `main` cuando armé la cadena) — esa **no** es la que corre hoy: es solo el punto de partida que usé para conectar la fuente la primera vez. Lo que corre en cada momento lo decide el `imgURL` del hook de cada deploy, que mi pipeline arma con `${{ github.sha }}` de esa corrida — no hace falta volver a tocar *Settings* con cada merge, porque Render solo exige que coincidan el registry y el nombre de la imagen, no la etiqueta. No creé servicios nuevos (cambié la fuente de los 4 que ya tenía desde el TP6), así que no hay servicios viejos que dar de baja.
+
+### 3. Cómo se comprueba, desde afuera, que un entorno ejecuta mi imagen y no una reconstrucción
+
+Desde *Actions*/el repo: el tag `sha-<commit>` tiene que existir en ambos paquetes públicos (confirmable con `docker pull` sin sesión), y es el mismo string que el pipeline mandó como `imgURL`. Desde Render (*Events* de cada servicio, no público — lo muestro en vivo en la defensa): cada deploy real dice **"Triggered via Deploy Hook"** y nombra esa misma etiqueta — un deploy manual desde el panel no diría eso, y por eso dejé de usar *Manual Deploy* para cualquier cosa.
+
+Lo que el **smoke test no prueba**: que la imagen que levantó el servicio sea la que el pipeline mandó. El smoke solo confirma que el proceso responde (`/health`), que la base conecta (`/api/ingredients`) y que el front sirve algo — si el deploy real hubiera fallado silenciosamente y Render siguiera sirviendo la versión anterior, el smoke daría verde igual, porque "responde" no es lo mismo que "responde con la imagen de esta corrida" (es el límite que ya había anotado en el TP6 §7, y que la guía confirma en su §2.4: cerrarlo del todo necesitaría hornear el commit en la imagen y comparar contra el endpoint de vida, algo que queda fuera de este TP).
+
+### 4. Integración: qué pruebo, y por qué elegí la amplia y no la estrecha
+
+Mi `api.spec.js` tiene **5 pruebas**, todas contra la API de QA ya desplegada (la base de verdad), sin ningún doble:
+
+1. Alta + verificación (`GET` con `mine=true`) + borrado, con limpieza comprobada.
+2. Título vacío → `422` (no `400`: en mi stack, Pydantic valida `title: str = Field(min_length=1)` *antes* de que mi código de negocio corra — es un detalle real de FastAPI que la guía, escrita sobre .NET, no menciona).
+3. **Autorización de lectura**: un usuario B no puede ver una receta privada de A (`404`, no `403` — mi código la oculta como si no existiera).
+4. **Autorización de escritura**, la que elegí como extra: B no puede borrar (ni editar) una receta de A (`403` — acá sí confirma que existe, porque borrar ya asume que sabés el id). La agregué después de notar que 3 y 4 son la misma entidad con dos reglas de negocio distintas y dos códigos distintos.
+5. Un `ingredient_id` que no existe → `400` (integridad referencial, no un error de formato).
+
+Elegí la **amplia** (contra QA desplegado) y no la estrecha (`WebApplicationFactory`/una base descartable en el job) porque ya tengo QA corriendo la imagen exacta de cada corrida, y me ahorra levantar un Postgres aparte en el pipeline — con una fracción de la configuración, pruebo lo mismo y de paso confirmo que el *despliegue* quedó bien. Lo que pierdo: más lenta que la estrecha (corre en segundos contra la red, no en el mismo proceso), depende de que QA esté arriba y despierto, y comparte el mismo entorno con mis propias corridas sucesivas.
+
+**Lo que NO puse en integración y por qué**: no repetí la regla de "no borrar un ingrediente en uso" (`409`, `delete_ingredient`) — ya la tengo cubierta con un unitario con doble del TP5, y esa regla es lógica de aplicación pura (una fila en `RecipeIngredient` sí o no), no depende de qué conteste la base de verdad. Agregarla acá hubiera sido duplicar cobertura sin sumar nada que el unitario no viera ya.
+
+### 5. e2e: qué flujos elegí, y por qué
+
+`recetas.spec.js` tiene **3 flujos**, todos contra el front de QA desplegado, con un usuario nuevo por corrida (email con timestamp, registrado por la UI real):
+
+1. **Creación**: completar el formulario de receta, verla en el listado (con el buscador real), borrarla, confirmar que no está.
+2. **Validación**: crear dos recetas con el mismo título → la segunda muestra el error (con `role="alert"`, que tuve que agregar — ver §9) y no se crea una receta de más.
+3. **Publicar**, la que elegí como tercera: crear una receta completa, publicarla, y ver el badge cambiar de "Privada" a "Pública". La elegí porque es el flujo que le da sentido a tener un recetario en primer lugar — compartir una receta es la razón de ser de la app; si se rompe, no hay "receta pública" para nadie más, que es literalmente el producto.
+
+**Lo que NO puse en e2e y por qué**: no agregué un flujo que pruebe el escalado de porciones (`scaleIngredients`) de punta a punta con el navegador, aunque es una función central de la app — ya la tengo cubierta al 100% por unitarios del TP5 (con dobles, porque es cálculo puro, no necesita ni API ni navegador). Repetirla en e2e solo hubiera sumado un test caro y lento verificando algo que ya sé que funciona.
+
+### 6. El par verde/rojo que diagnosticó mi rotura
+
+Para generar la evidencia rompí el **front**, no la API ni los tests: en `RecipeDetailPage.jsx`, justo antes de llamar a `api.createRecipe`, le renombro al payload el campo de `title` a `titulo` (ver el commit `4205ecb8`). Elegí ese punto a propósito: `buildRecipePayload` (en `lib/recipes.js`) sigue devolviendo `title` bien, así que el unitario del TP5 que valida el nombre del campo (`recipes.test.js`, línea 91) **sigue verde** — confirmé esto corriendo `npx vitest run` antes de subir el commit. El bug vive un nivel más arriba, donde ningún test del TP5 mira.
+
+El resultado, corrida [37256820547](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/actions/runs/37256820547): `integracion` quedó **verde** (le habla a la API con el campo `title` correcto, directo, sin pasar por mi bug) y `e2e` quedó **roja** (el navegador usa mi formulario roto). Leído contra la tabla de §2.5, sin abrir el código: fila 1, "se rompió el front, la API está sana". Lo confirmé mirando el reporte rojo — el screenshot del fallo muestra el formulario trabado en `/recipes/new`, con el error crudo de FastAPI en pantalla (`"loc":["body","title"],"msg":"Field required"`, con `"titulo"` adentro del `input` que mandé), no el mensaje genérico que vería un usuario.
+
+Si en cambio hubiera roto la API (por ejemplo, el endpoint de alta), `integracion` se habría puesto roja y `e2e` **no habría llegado a correr** (su `needs: integracion` no se cumple) — fila 2 de la tabla, y es justo la razón por la que no se gasta un browser en confirmar algo que la integración ya sabe.
+
+### 7. Cold start y test flaky
+
+Mis e2e corren después del smoke de `deploy-qa`, que ya despertó el servicio — por eso el minuto de `timeout: 60_000` del `playwright.config.js` alcanza en el pipeline. Cuando corrí las suites a mano contra un QA recién dormido (fuera del pipeline), medí ~22 segundos de cold start en el primer pedido (`curl` directo a `/health`). El `retries: 1` del config absorbe una demora suelta de la red — pero un test que pasa recién al reintentar queda marcado como **flaky** en el reporte, y eso no es gratis: si el mismo test sale flaky dos corridas seguidas, ya no es "el plan gratis", es un test mal escrito que hay que arreglar, porque entrena a ignorar el rojo.
+
+### 8. Cómo logro que la misma imagen del front sirva en QA y en PROD
+
+El `Dockerfile` del frontend no tiene nada específico de entorno — nginx sirve los mismos estáticos siempre. Lo que distingue QA de PROD son dos variables de entorno que lee `default.conf.template` al arrancar el contenedor (`BACKEND_URL` y `DNS_RESOLVER`), ya configuradas por servicio desde el TP6 y que no toqué en este TP. Por eso cuando conecté los 4 servicios a *Existing Image* con la misma etiqueta, nada se rompió: la imagen es idéntica, y el único cambio real entre entornos sigue viviendo fuera de ella, en la config del servicio.
+
+### 9. Problemas encontrados y cómo los resolví
+
+- **Labels sin `htmlFor`/`id` en el formulario de receta.** Al escribir la primera e2e, `getByLabel('Título')` no encontraba nada — mirando el JSX, el `<label>` y el `<input>` estaban uno al lado del otro visualmente pero sin ninguna conexión en el HTML. Lo arreglé agregando `id`/`htmlFor` a los 4 campos del formulario (título, descripción, porciones base, tiempo de preparación): no fue un parche para que pasara el test, es una mejora real de accesibilidad que la app necesitaba.
+- **Los errores no tenían `role="alert"`.** Mismo motivo: sin eso, `getByRole('alert')` no encuentra el mensaje de error, y usar un selector de CSS (`.error`) es justo lo que la guía pide evitar porque se rompe con cualquier cambio de diseño. Lo agregué a los dos lugares donde el formulario muestra errores.
+- **`window.confirm` en el borrado bloquea Playwright.** Mi `handleDelete` usa el `confirm()` nativo del navegador; Playwright lo descarta automáticamente si no hay un handler. Lo resolví con `page.once('dialog', (dialog) => dialog.accept())` antes de cada click en "Borrar" en los specs — no toqué el código de la app, porque un `confirm()` nativo es una decisión de UX válida, no un bug.
+- **El endpoint local no es el 8080 de la guía.** Mi `docker-compose.yml` publica el backend en el **8888** (no 8080 como la app de cátedra) — tuve que usarlo como default de `API_BASE_URL` en los specs y en los comandos locales, si no los tests fallaban contra un puerto que no existía.
+- **Encontré un bug real de UX, aparte del intencional**: cuando la API devuelve un error de validación con `detail` como array (el formato real de Pydantic), mi `api.js` caía al `JSON.stringify(message)` y el usuario veía el JSON crudo en vez de un mensaje legible — lo vi en el screenshot del reporte rojo de la Tarea 4. No lo mezclé en ese commit a propósito (mezclar un bug real con el intencional ensucia la evidencia de la Tarea 4): lo arreglé aparte, agregando `mensajeDeError()` en `api.js`, que arma un mensaje legible uniendo los `msg` de cada campo cuando `detail` es un array, y deja el string tal cual cuando ya viene legible. Es difícil de disparar con el formulario de recetas de hoy (el `required`/`min` del HTML ya bloquea los casos más obvios antes de que la API llegue a devolver ese formato), pero cualquier regla de validación nueva que agregue en el futuro —o cualquier otro formulario de la app— se beneficia del arreglo sin tener que acordarme de este caso de nuevo.
+
+### Declaración de uso de IA
+
+Usé Claude Code durante todo este TP, de la misma forma que en el TP6: le iba explicando qué quería entender o lograr, y revisábamos juntos cada paso contra el estado real antes de seguir (nunca "aplicá esto" a ciegas). Su rol concreto acá:
+
+- Leer la guía completa del TP7 junto conmigo y contrastarla con mi código real (backend FastAPI + auth, que la app de cátedra no tiene) para anticipar los puntos de fricción: el `422` vs `400` de Pydantic, el puerto `8888` de mi compose, la falta de `htmlFor`/`id` en mis labels, el `window.confirm` del borrado — se lo expliqué de la guía y las encontró leyendo mi código, no al revés.
+- Diagnosticar conmigo el bug de UX del mensaje de error (el `JSON.stringify` crudo) a partir del screenshot del reporte rojo — lo encontré yo viendo el screenshot, pero él me lo implementó.
+- Me ayudó a redactar esta sección a partir de los SHAs, run IDs y código reales de la cursada.
+- Me asistió para identificar algunos de los comandos que se ven en la terminal del video y cómo aplicarlos usando git u otras alternativas, para comprender mejor lo que estoy haciendo y no simplemente copiar y pegar.
+
+Las decisiones fueron mías: qué romper y dónde (elegí el punto exacto para no pisar el unitario del TP5), qué iba en cada suite y por qué, y qué dejar afuera de cada una por la pirámide. Verifiqué cada paso contra el estado real (corridas de Actions, reportes de Playwright, `vitest run`) antes de darlo por bueno.
