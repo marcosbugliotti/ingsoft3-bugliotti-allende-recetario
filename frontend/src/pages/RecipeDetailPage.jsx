@@ -92,8 +92,10 @@ export default function RecipeDetailPage({ mode }) {
         api,
         token,
       )
+      const { title: tituloPayload, ...restoPayload } = payload
+      const payloadParaCrear = { ...restoPayload, titulo: tituloPayload }
       const saved = isNew
-        ? await api.createRecipe(payload, token)
+        ? await api.createRecipe(payloadParaCrear, token)
         : await api.updateRecipe(id, payload, token)
 
       if (isNew) {
