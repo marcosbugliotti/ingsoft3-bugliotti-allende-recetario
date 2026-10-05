@@ -6,7 +6,12 @@ const BASE_URL = '/api'
 function mensajeDeError(detail, status) {
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {
-    return detail.map((item) => item.msg).join(', ')
+    return detail
+      .map((item) => {
+        const campo = item.loc?.at(-1) // último elemento de loc: el nombre del campo
+        return campo ? `${campo}: ${item.msg}` : item.msg
+      })
+      .join(', ')
   }
   return `Error ${status}`
 }
