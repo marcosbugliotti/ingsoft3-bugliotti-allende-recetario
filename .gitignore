@@ -17,6 +17,8 @@ coverage.xml
 coverage/
 backend-coverage/
 frontend-coverage/
+playwright-report/
+test-results/
 
 # secretos: NUNCA se versionan
 .env
