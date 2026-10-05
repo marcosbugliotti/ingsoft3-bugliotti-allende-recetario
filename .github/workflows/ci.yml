@@ -199,15 +199,78 @@ jobs:
           done
           echo "❌ QA no respondió a tiempo"; exit 1
 
+  integracion:
+    runs-on: ubuntu-latest
+    needs: deploy-qa                       # QA ya está ejecutando la imagen de ESTA corrida
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install (sin browser)
+        run: npm ci                        # ← sin `playwright install`: estas pruebas no abren navegador
+        working-directory: ./frontend
+
+      - name: Integración contra la api de QA
+        env:
+          API_BASE_URL: https://recetario-api-qa.onrender.com    # ⚠️ TU api de QA (la api, no el front)
+        run: npx playwright test e2e/api.spec.js
+        working-directory: ./frontend
+
+      - name: Publicar reporte de integración
+        uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report-integracion   # distinto del de e2e: dos iguales rompen la corrida
+          path: frontend/playwright-report
+          retention-days: 7
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: integracion                     # si la api está rota, no gastamos un browser en confirmarlo
+    timeout-minutes: 20                    # si algo se cuelga, el job muere en vez de esperar horas
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install + browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+        working-directory: ./frontend
+
+      - name: e2e contra QA
+        env:
+          E2E_BASE_URL: https://recetario-front-qa.onrender.com   # ⚠️ TU front de QA
+        run: npx playwright test e2e/recetas.spec.js   # ← SU archivo: sin esto vuelve a correr la integración
+        working-directory: ./frontend
+
+      - name: Publicar reporte e2e
+        uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}            # el reporte importa MÁS cuando falla (y no cuando cancelás)
+        with:
+          name: playwright-report-e2e
+          path: frontend/playwright-report
+          retention-days: 7
+
   deploy-prod:
     runs-on: ubuntu-latest
-    needs: deploy-qa                            # PROD solo después de QA vivo
-    environment: production                     # ⏸ acá el workflow SE PAUSA hasta el approve
+    needs: e2e                             # ← EL gate: sin e2e verde, ni siquiera se pide aprobación
+    environment: production                # ⏸ el reviewer del TP6 sigue ahí
+    concurrency: { group: deploy-prod, cancel-in-progress: false }   # la del TP6 §3.4 — si no la agregaste allá, va ahora
     steps:
-      # 🔴 Y ACÁ MÁS QUE EN NINGÚN LADO: PROD tiene que recibir LA MISMA imagen
-      # que QA verificó — no "el mismo commit reconstruido otra vez". Con
-      # imgURL eso queda escrito como parámetro de la llamada, no como una
-      # promesa.
       - name: Deploy de la MISMA imagen a PROD
         shell: bash
         env:
@@ -217,25 +280,20 @@ jobs:
           IMG_API="ghcr.io/${{ github.repository }}-backend:sha-${{ github.sha }}"
           IMG_FRONT="ghcr.io/${{ github.repository }}-frontend:sha-${{ github.sha }}"
           curl -fsS --max-time 30 --get --data-urlencode "imgURL=$IMG_API" "$HOOK_API"
-          curl -fsS --max-time 30 --get --data-urlencode "imgURL=$IMG_FRONT" "$HOOK_FRONT"
+          curl -fsS --max-time 30 --get --data-urlencode "imgURL=$IMG_FRONT" "$HOOK_FRONT"   # ← la MISMA imagen que verificaron QA y las e2e
 
-      - name: Smoke test PROD
+      - name: Smoke test PROD (espera a que PROD responda)
         shell: bash
-        env:               # ⚠️ TUS URLs de PROD: el loop es el mismo que el de QA
+        env:               # ⚠️ TUS URLs de PROD
           URL_API: https://recetario-api-prod.onrender.com
           URL_FRONT: https://recetario-front-prod.onrender.com
         run: |
           for i in $(seq 1 30); do
-            # 🔴 EL `--max-time` VA ACÁ, que es donde puede colgarse. Un servicio
-            # despertando de un cold start acepta la conexión y no contesta: sin
-            # tope, `curl` no tiene límite y puede quedarse esperando en CADA
-            # vuelta hasta que el job muera por el límite del runner — no por tu
-            # entorno, y el error no lo dice.
-            if curl -fsS --max-time 10 "$URL_API/health" \
+            if curl -fsS --max-time 10 "$URL_API/health" > /dev/null \
                && curl -fsS --max-time 10 "$URL_API/api/ingredients" > /dev/null \
                && curl -fsS --max-time 10 "$URL_FRONT/" > /dev/null; then
               echo "✅ PROD responde (API + BD + front)"; exit 0
             fi
             sleep 20
           done
-          exit 1
+          echo "❌ PROD no respondió a tiempo"; exit 1
