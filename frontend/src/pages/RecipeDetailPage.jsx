@@ -140,16 +140,26 @@ export default function RecipeDetailPage({ mode }) {
         </button>
         <h1>{isNew ? 'Nueva receta' : 'Editar receta'}</h1>
         <div className="form-row">
-          <label>Título</label>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} required />
-        </div>
-        <div className="form-row">
-          <label>Descripción</label>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} />
-        </div>
-        <div className="form-row">
-          <label>Porciones base</label>
+          <label htmlFor="recipe-title">Título</label>
           <input
+            id="recipe-title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            required
+          />
+        </div>
+        <div className="form-row">
+          <label htmlFor="recipe-description">Descripción</label>
+          <textarea
+            id="recipe-description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+        <div className="form-row">
+          <label htmlFor="recipe-servings-base">Porciones base</label>
+          <input
+            id="recipe-servings-base"
             type="number"
             min="1"
             value={servingsBase}
@@ -157,8 +167,9 @@ export default function RecipeDetailPage({ mode }) {
           />
         </div>
         <div className="form-row">
-          <label>Tiempo de preparación (min)</label>
+          <label htmlFor="recipe-prep-time">Tiempo de preparación (min)</label>
           <input
+            id="recipe-prep-time"
             type="number"
             min="0"
             value={prepTime}
@@ -197,7 +208,11 @@ export default function RecipeDetailPage({ mode }) {
           + Agregar ingrediente
         </button>
 
-        {error && <p className="error">{error}</p>}
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
 
         <div className="toolbar">
           <button type="submit" disabled={saving}>
@@ -266,7 +281,11 @@ export default function RecipeDetailPage({ mode }) {
         ))}
       </ul>
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
 
       {isOwner && (
         <div className="toolbar">
