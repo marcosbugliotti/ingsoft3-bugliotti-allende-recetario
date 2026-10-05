@@ -1,5 +1,16 @@
 const BASE_URL = '/api'
 
+// El "detail" de un error de FastAPI es un string (las excepciones que
+// lanza nuestro código) o, en un error de validación de Pydantic, una
+// lista de {loc, msg, ...} — una por campo inválido.
+function mensajeDeError(detail, status) {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item.msg).join(', ')
+  }
+  return `Error ${status}`
+}
+
 async function request(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers.Authorization = `Bearer ${token}`
@@ -15,8 +26,7 @@ async function request(path, { method = 'GET', body, token } = {}) {
   const data = await res.json().catch(() => null)
 
   if (!res.ok) {
-    const message = data?.detail || `Error ${res.status}`
-    throw new Error(typeof message === 'string' ? message : JSON.stringify(message))
+    throw new Error(mensajeDeError(data?.detail, res.status))
   }
 
   return data
