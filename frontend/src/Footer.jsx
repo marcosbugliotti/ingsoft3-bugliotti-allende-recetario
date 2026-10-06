@@ -2,12 +2,34 @@ import { useEffect, useRef, useState } from 'react'
 
 const ICONOS = { local: '🧑‍🍳', qa: '🥘', prod: '🍽️' }
 const TRIPLE_CLICK_MS = 600
+const REPO = 'marcosbugliotti/ingsoft3-bugliotti-allende-recetario'
+// nombre del environment de GitHub (ci.yml) por entorno detectado del hostname
+const ENVIRONMENT_POR_ENTORNO = { qa: 'qa', prod: 'production' }
 
 function detectarEntorno() {
   const host = window.location.hostname
   if (host.includes('-qa')) return 'qa'
   if (host.includes('-prod')) return 'prod'
   return 'local'
+}
+
+// El deployment más reciente de un environment puede estar "waiting"
+// (esperando aprobación) o "queued"/"in_progress" — no necesariamente lo
+// que Render ya tiene corriendo. Hay que recorrer hacia atrás hasta
+// encontrar el último cuyo estado real sea "success".
+async function obtenerCommitDesplegado(environment) {
+  const res = await fetch(
+    `https://api.github.com/repos/${REPO}/deployments?environment=${environment}&per_page=5`,
+  )
+  const deployments = await res.json()
+  for (const deployment of deployments) {
+    const statusesRes = await fetch(deployment.statuses_url)
+    const statuses = await statusesRes.json()
+    if (statuses[0]?.state === 'success') {
+      return deployment.sha
+    }
+  }
+  return null
 }
 
 export default function Footer() {
@@ -18,11 +40,18 @@ export default function Footer() {
   const entorno = detectarEntorno()
 
   useEffect(() => {
-    fetch('/api/version')
-      .then((res) => res.json())
-      .then((data) => setCommit(data.commit))
+    // TP7: ya no le preguntamos a nuestro propio backend (RENDER_GIT_COMMIT
+    // no existe en un servicio *Existing Image*) — le preguntamos a GitHub
+    // qué commit quedó como el último deployment real de este entorno.
+    const environment = ENVIRONMENT_POR_ENTORNO[entorno]
+    if (!environment) {
+      setCommit('local')
+      return
+    }
+    obtenerCommitDesplegado(environment)
+      .then((sha) => setCommit(sha ? `sha-${sha.slice(0, 7)}` : '?'))
       .catch(() => setCommit('?'))
-  }, [])
+  }, [entorno])
 
   useEffect(() => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">${ICONOS[entorno]}</text></svg>`
@@ -60,7 +89,7 @@ export default function Footer() {
       </button>
       {revelado && commit && (
         <span className="commit">
-          {entorno.toUpperCase()} · commit {commit}
+          {entorno.toUpperCase()} · {commit}
         </span>
       )}
     </footer>
