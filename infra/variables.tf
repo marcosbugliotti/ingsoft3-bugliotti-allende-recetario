@@ -7,7 +7,7 @@ variable "image_repo_front" {
 }
 
 variable "image_tag" {
-  default = "sha-8e0c05b8b2f61df405dbcc3d0af250e3d751cba2" # commit del release v7.0.0 (TP7)
+  default = "sha-54a12b9fe8be2ebbf51a145cc731f9d4164976c4" # merge del PR de infra/ + footer de preprod (TP8)
 }
 
 variable "region" {
