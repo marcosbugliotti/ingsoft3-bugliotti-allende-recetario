@@ -416,3 +416,90 @@ Usé Claude Code durante todo este TP, de la misma forma que en el TP6: le iba e
 - Me asistió para identificar algunos de los comandos que se ven en la terminal del video y cómo aplicarlos usando git u otras alternativas, para comprender mejor lo que estoy haciendo y no simplemente copiar y pegar.
 
 Las decisiones fueron mías: qué romper y dónde (elegí el punto exacto para no pisar el unitario del TP5), qué iba en cada suite y por qué, y qué dejar afuera de cada una por la pirámide. Verifiqué cada paso contra el estado real (corridas de Actions, reportes de Playwright, `vitest run`) antes de darlo por bueno.
+
+## TP8 — Infraestructura como Código
+
+> 📌 Esta sección documenta `infra/` tal como quedó en el commit de este PR. El tag `v8.0.0` se hace sobre un commit posterior, una vez que actualice `image_tag` con la imagen que ya incluye el footer de preprod (§7) — el flujo completo está contado al final de §7.
+
+### 1. Riel elegido y versiones fijadas
+
+Riel canónico: Terraform `v1.16.5` (instalado con `winget install Hashicorp.Terraform`, más nueva que la `1.15.8` que midió la cátedra — sin incompatibilidad) contra los mismos proveedores del TP6/TP7: `kislerdm/neon` `0.18.0` y `render-oss/render` `1.9.1`, fijados en `infra/main.tf`.
+
+`infra/` quedó así hasta ahora:
+- `main.tf`: bloque `terraform` + providers, y los tres recursos de la base de `preprod` (`neon_project`, `neon_role`, `neon_database`).
+- `outputs.tf`: `db_host` y `database`.
+- `.gitignore` (en la raíz del repo): agregadas las 4 líneas de la guía — `*.tfstate`, `*.tfstate.*`, `.terraform/`, `*.tfvars` — **antes** del primer `apply`.
+- Trabajo en la rama `infra-preprod` (creada desde `main` ya actualizado con el fix del footer del TP7).
+
+### 2. Divergencia con la guía: `org_id` obligatorio en Neon
+
+El primer `apply` falló con `Error: [HTTP Code: 400] org_id is required` en `neon_project`. La guía (medida el 21-09-2026) no lo menciona — es un cambio posterior de la API de Neon que ahora exige asociar el proyecto a una organización. Lo resolví consultando mi organización por API (`GET /users/me/organizations` con `NEON_API_KEY`) y agregando el atributo `org_id = "org-little-hall-52660203"` al recurso `neon_project`. No es secreto (es un identificador, igual que `RENDER_OWNER_ID`), así que va escrito en el `.tf` que se commitea.
+
+### 3. Idempotencia y el estado por dentro (checkpoint §3.2)
+
+Con la base ya creada, el segundo `terraform plan`/`apply` dio **"No changes. Your infrastructure matches the configuration"** — la idempotencia demostrada: misma config, misma corrida, cero acciones.
+
+Abrí `terraform.tfstate` con `Select-String -Path terraform.tfstate -Pattern "password"` (el `grep` de la guía es de bash; en PowerShell no existe nativo) y encontré la contraseña real del rol en texto plano (`"database_password": "npg_..."`). Confirmé con `git add -n infra/` que el estado **no** entra al commit — solo suben `main.tf`, `outputs.tf` y `.terraform.lock.hcl`.
+
+### 4. Drift provocado y reparado — y un incidente propio en el camino (checkpoint §3.3)
+
+Al simular el "cambito a mano" me equivoqué de alcance: en vez de borrar solo la base `recetario_preprod` desde la consola de Neon, terminé borrando **las dos bases del branch** (incluida la `neondb` por defecto). El siguiente `terraform plan` no mostró el drift esperado: falló al refrescar el *proyecto* con `Error: ... operation GetProjectBranchRolePassword: decode params: path: "role_name": field required` — un bug del provider `kislerdm/neon` 0.18.0 al intentar recalcular `connection_uri`/`database_password` del proyecto cuando la base por defecto del branch ya no existe, reproducible incluso con el rol (`recetario_preprod_owner`) todavía presente y visible en la consola.
+
+No perseguí el bug más allá de confirmarlo (lo documento acá como "no medido por la cátedra", en el espíritu del §3 de la guía). Lo resolví sacando los tres recursos del estado (`terraform state rm` sobre los tres) y recreando todo desde el código — el mismo argumento central de §2.1 del TP, demostrado por accidente: `apply` recreó proyecto, rol y base en 6 segundos, idéntico, desde cero.
+
+Efecto colateral: el proyecto viejo (`lively-cake-04003051`) quedó huérfano — fuera del estado de Terraform, pero vivo y consumiendo cuota en Neon. Lo detecté comparando el estado contra la API real (`GET /projects?org_id=...`, que en ese momento listaba **dos** proyectos llamados `recetario-preprod`) y lo borré a mano con `DELETE /projects/{id}` — confirmando antes, por `created_at`, cuál de los dos era el huérfano y cuál el que Terraform gestionaba de ahí en más. Es, en los hechos, el mismo fenómeno que el §2.5/§3.3 de la guía hace provocar a propósito con la "base intrusa": un recurso real que el `plan` no ve porque no está declarado, y que sigue gastando cuota igual.
+
+Con el proyecto huérfano borrado, repetí el drift correctamente (solo la base, desde Databases → Delete): `terraform plan` mostró `# neon_database.preprod will be created` / `Plan: 1 to add, 0 to change, 0 to destroy`, y el `apply` la repuso. Checkpoint cerrado.
+
+### 5. Render: los dos servicios, y lo que tuve que adaptar de la guía (checkpoint §3.4)
+
+La guía está escrita sobre .NET y usa `ConnectionStrings__Default` con formato `Host=...;Database=...`. Mi backend es FastAPI + SQLAlchemy y lee `DATABASE_URL` (confirmado en `app/config.py` y `app/database.py`, `create_engine(settings.database_url)`), con formato de URL de Postgres estándar — armé el `local` en `main.tf` así:
+
+```hcl
+conn = "postgresql://${neon_role.preprod.name}:${neon_role.preprod.password}@${neon_project.preprod.database_host}/${neon_database.preprod.name}?sslmode=require"
+```
+
+(`sslmode=require` porque Neon lo exige; lo usa `psycopg2-binary`, ya en mis `requirements.txt`).
+
+Agregué además una variable que la guía no tiene: **`SECRET_KEY`**. Mi app tiene autenticación JWT (`app/routers/auth.py`) — algo que la app de cátedra, sin login, no necesita. La declaré como `variable "secret_key" { sensitive = true }`, sin `default`, con el valor real en `infra/local.tfvars` (cubierto por el `.gitignore`, nunca se commitea) — generé una clave **nueva**, distinta de la de QA/PROD, porque preprod es desechable y no tiene sentido que comparta secretos de firma de tokens con producción.
+
+El resto fue calcado de la guía: `BACKEND_URL`/`DNS_RESOLVER` en el front (ya usaba esos nombres exactos desde el TP6), la URL del backend derivada de `render_web_service.api.url` (no copiada a mano), y la imagen con `image_url`/`tag` separados.
+
+**Dos errores que encontré, ninguno estaba en la guía:**
+- `terraform apply -var-file=local.tfvars` (con `=`) tiraba `Error: Too many command line arguments` en mi instalación (Terraform 1.16.5 vía `winget`) — con espacio (`-var-file local.tfvars`) funcionó siempre. No encontré la causa exacta; lo dejo anotado porque me costó tiempo de debug.
+- El primer `apply` de los servicios falló con `invalid ownerID: usr-...` — había copiado mal el `RENDER_OWNER_ID` de la URL del dashboard. Lo saqué de la fuente correcta, `GET https://api.render.com/v1/owners` con mi `RENDER_API_KEY`, y resultó ser de tipo `tea-...` (mi cuenta es un *team* workspace, "My Workspace"), no `usr-...` como esperaba.
+
+Verificado como entorno completo, no solo como recursos creados:
+```
+curl https://recetario-api-preprod.onrender.com/health
+curl https://recetario-api-preprod.onrender.com/api/recipes
+```
+y el front cargando contra su propia api en el navegador, con la cuenta de prueba que creé ahí mismo.
+
+### 6. El ciclo de vida completo (checkpoint §3.5)
+
+`terraform destroy` se llevó los 5 recursos. El **plan** del destroy los lista alfabéticamente (`database`, `project`, `role`, y los dos `render_web_service`), pero la **ejecución real** fue al revés del grafo de dependencias: `front` → `api` → `database` → `role` → `project` — nadie escribió ese orden, sale de las referencias (`neon_project.preprod.id`, etc.) que usé al declarar cada recurso. Confirmé en las dos consolas que QA y PROD no se tocaron.
+
+`terraform apply` lo trajo de vuelta **idéntico**: mismas URLs de Render (`recetario-api-preprod.onrender.com` / `recetario-front-preprod.onrender.com`, sin sufijo — Render no lo necesitó esta vez), nueva base vacía en Neon (otro id de proyecto por dentro, mismo nombre y esquema). Tiempos: 8s + 1s + 1s (Neon) + 6s + 6s (Render) — del orden de lo que midió la cátedra.
+
+Probé `prevent_destroy` en `neon_database.preprod`: con la línea puesta, `terraform destroy` se negó (`Error: Instance cannot be destroyed`, nombrando el recurso exacto) y ni siquiera llegó a plantear el borrado del rol/proyecto. La saqué después — preprod tiene que poder morir, la protección era solo para comprobar que existe.
+
+### 7. Mejora propia: el footer/ícono de pestaña distingue `preprod`
+
+Más allá de lo que pide el TP8, extendí el footer con triple-click que ya tenía del TP6/TP7 (`frontend/src/Footer.jsx`) para que reconozca el hostname `-preprod` (antes de chequear `-prod`, para no confundirlos) y muestre un ícono propio (🧪) y el texto `PREPROD · terraform` al revelarlo — no hay commit de GitHub que consultar para preprod (no pasa por mi pipeline, lo crea Terraform), así que no intento la llamada a la API de Deployments que uso para QA/PROD.
+
+De paso encontré y corregí un bug preexistente: el botón tenía las clases `env-icon env-qa`/`env-prod`, pero el CSS buscaba `.env-icon.qa`/`.env-icon.prod` (sin el prefijo `env-` en la segunda clase) — los colores de fondo por entorno nunca se habían aplicado desde que los agregué. Lo corregí de paso.
+
+**Para que preprod corra esta imagen con el ícono nuevo**, el flujo tiene un orden obligado que anoto acá porque no es obvio: el `image_tag` de Terraform tiene que apuntar a un commit **ya mergeado y con su imagen ya publicada** por mi pipeline — no puedo tagear `v8.0.0` sobre un commit que todavía no generó la imagen que uso. Por eso el cierre real de este TP es en dos pasos: (1) este commit, con `infra/` y el footer, mergeado — dispara el build; (2) un commit siguiente que actualiza `image_tag` al `sha-<este-merge>` y vuelve a aplicar `preprod` — ese es el que tagueo como `v8.0.0`.
+
+### Declaración de uso de IA
+
+Usé Claude Code durante todo este TP, de la misma forma que en el TP6/TP7: antes de cada comando le explicaba qué quería lograr y por qué, y verificamos juntos cada salida real (de `terraform`, de la consola de Neon, de Render, de la API) antes de seguir — ninguna corrección se aplicó "a ciegas". Su rol concreto:
+- Me ayudó a instalar Terraform con `winget` cuando `choco` no estaba disponible, y a traducir a PowerShell los comandos de la guía que vienen en bash (`grep` → `Select-String`, `$env:VAR = "..."` en vez de `export`).
+- Diagnosticó conmigo el error de `org_id`, el bug de `GetProjectBranchRolePassword`, y el `invalid ownerID` de Render — en los tres casos leyendo el mensaje de error real y, cuando hizo falta, consultando la API directamente (organizaciones de Neon, owners de Render) en vez de asumir una causa.
+- Me ayudo a adaptar la cadena de conexión y el `env_vars` del backend a mi stack real (FastAPI/SQLAlchemy, `DATABASE_URL`, `SECRET_KEY` por la auth JWT) en vez de copiar literal el ejemplo de la guía, que está escrito sobre .NET.
+- Implementó la extensión del footer (§7) a partir de mi pedido de "que se note cuál es preprod" — el ícono, el color y el criterio de detección del hostname fueron una propuesta suya que revisé antes de aplicar; el bug de las clases CSS lo encontró leyendo el componente, no soy yo quien lo notó.
+- Me guió para confirmar por API (no a ojo) cuál proyecto de Neon era el huérfano antes de borrar nada, para no arriesgar el proyecto correcto.
+- Me ayudó a redactar esta sección a partir de los comandos y salidas reales de la cursada.
+
+Las decisiones fueron mías: crear la rama `infra-preprod`, los nombres de los recursos (`recetario-preprod`, `recetario_preprod_owner`), generar una `SECRET_KEY` propia para preprod en vez de reusar la de producción, y cómo resolver el incidente del proyecto huérfano (sacar del estado y recrear, en vez de seguir peleando con el bug del provider). Verifiqué cada paso contra el estado real (consola de Neon, dashboard/API de Render, `git status`/`git add -n` antes de cada commit), no contra lo que "debería" haber pasado.

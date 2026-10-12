@@ -24,6 +24,12 @@ test-results/
 .env
 *.local
 
+# Terraform (TP8): el estado tiene secretos en texto plano, nunca se versiona
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+
 # basura del sistema operativo y del editor
 .DS_Store
 Thumbs.db
