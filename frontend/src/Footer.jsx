@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 
-const ICONOS = { local: '🧑‍🍳', qa: '🥘', prod: '🍽️' }
+const ICONOS = { local: '🧑‍🍳', qa: '🥘', preprod: '🧪', prod: '🍽️' }
 const TRIPLE_CLICK_MS = 600
 const REPO = 'marcosbugliotti/ingsoft3-bugliotti-allende-recetario'
-// nombre del environment de GitHub (ci.yml) por entorno detectado del hostname
+// nombre del environment de GitHub (ci.yml) por entorno detectado del hostname.
+// preprod NO tiene entrada acá a propósito: no pasa por el pipeline (TP8, creado
+// por Terraform), así que no hay ningún "deployment" de GitHub que consultar.
 const ENVIRONMENT_POR_ENTORNO = { qa: 'qa', prod: 'production' }
 
 function detectarEntorno() {
   const host = window.location.hostname
   if (host.includes('-qa')) return 'qa'
+  if (host.includes('-preprod')) return 'preprod' // antes que '-prod': evita el falso match
   if (host.includes('-prod')) return 'prod'
   return 'local'
 }
@@ -43,6 +46,10 @@ export default function Footer() {
     // TP7: ya no le preguntamos a nuestro propio backend (RENDER_GIT_COMMIT
     // no existe en un servicio *Existing Image*) — le preguntamos a GitHub
     // qué commit quedó como el último deployment real de este entorno.
+    if (entorno === 'preprod') {
+      setCommit('terraform') // no hay deployment de GitHub que consultar: lo creó Terraform (TP8)
+      return
+    }
     const environment = ENVIRONMENT_POR_ENTORNO[entorno]
     if (!environment) {
       setCommit('local')
@@ -81,7 +88,7 @@ export default function Footer() {
     <footer className="footer">
       <button
         type="button"
-        className={`env-icon env-${entorno}`}
+        className={`env-icon ${entorno}`}
         onClick={handleClick}
         aria-label={`Entorno: ${entorno}`}
       >

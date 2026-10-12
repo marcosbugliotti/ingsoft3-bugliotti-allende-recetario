@@ -122,6 +122,9 @@ select {
 .env-icon.qa {
   background: #fdf0d5;
 }
+.env-icon.preprod {
+  background: #e5ddf7;
+}
 .env-icon.prod {
   background: #dff5e1;
 }
