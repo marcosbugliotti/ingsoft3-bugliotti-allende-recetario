@@ -30,7 +30,7 @@ def detectar_entorno() -> str:
     return "local"
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     entorno = detectar_entorno()
     return {
