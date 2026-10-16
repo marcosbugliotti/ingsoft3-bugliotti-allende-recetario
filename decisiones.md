@@ -503,3 +503,26 @@ Usé Claude Code durante todo este TP, de la misma forma que en el TP6/TP7: ante
 - Me ayudó a redactar esta sección a partir de los comandos y salidas reales de la cursada.
 
 Las decisiones fueron mías: crear la rama `infra-preprod`, los nombres de los recursos (`recetario-preprod`, `recetario_preprod_owner`), generar una `SECRET_KEY` propia para preprod en vez de reusar la de producción, y cómo resolver el incidente del proyecto huérfano (sacar del estado y recrear, en vez de seguir peleando con el bug del provider). Verifiqué cada paso contra el estado real (consola de Neon, dashboard/API de Render, `git status`/`git add -n` antes de cada commit), no contra lo que "debería" haber pasado.
+
+## TP9 — DevSecOps + Observabilidad + Continuous Feedback
+
+### 1. Dependabot: el PR que mergeé y por qué
+
+Activé Dependabot en los tres ecosistemas reales del repo (`pip` en `/backend`, no `nuget` como dice
+la guía — mi backend es FastAPI/Python; `npm` en `/frontend`; `github-actions` en `/`), con las
+alertas y las actualizaciones de seguridad prendidas en *Settings → Advanced Security*.
+
+A los minutos del merge aparecieron **17 PRs** de actualización (uno por dependencia con versión
+nueva disponible) — es el comportamiento esperado la primera vez que se activa Dependabot en un
+repo con historia, no un error. De esos 17 mergeé **#141**
+(`chore(deps-dev): bump coverage from 7.16.1 to 7.16.2 in /backend`): es un **patch** de SemVer
+(7.16.**1** → 7.16.**2**, no minor ni major), y es una dependencia de **desarrollo** (`coverage`,
+la herramienta de medición de cobertura de los tests) que no corre en producción — el riesgo de
+romper algo real era mínimo. Mi CI (`build-backend`, `build-frontend`) quedó en verde sobre ese PR,
+así que lo mergeé con esa confianza: ese verde es el mismo pipeline que vengo construyendo desde el
+TP4 (tests, TP5 coverage/gate, TP7 e2e) diciéndome "podés".
+
+Como contraste, dejé sin mergear **#146** (`bump bcrypt from 4.0.1 to 5.0.0`): es un **major**, y
+su `build-backend` **falló** en el propio PR — la prueba en vivo de por qué un major amerita mirar
+el changelog antes de tocarlo, a diferencia del patch que sí mergeé.
+
