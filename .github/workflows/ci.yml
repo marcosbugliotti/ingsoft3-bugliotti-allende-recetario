@@ -162,6 +162,7 @@ jobs:
           
   deploy-qa:
     runs-on: ubuntu-latest
+    permissions: {}                          # solo pega con curl a hooks externos, no toca el repo
     needs: [build-backend, build-frontend]   # sin CI verde no hay imagen
 
     if: github.ref == 'refs/heads/main'
@@ -201,6 +202,8 @@ jobs:
 
   integracion:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read                       # solo hace checkout para correr playwright
     needs: deploy-qa                       # QA ya está ejecutando la imagen de ESTA corrida
     timeout-minutes: 15
     steps:
@@ -233,6 +236,8 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read                       # solo hace checkout para correr playwright
     needs: integracion                     # si la api está rota, no gastamos un browser en confirmarlo
     timeout-minutes: 20                    # si algo se cuelga, el job muere en vez de esperar horas
     steps:
@@ -267,6 +272,7 @@ jobs:
 
   deploy-prod:
     runs-on: ubuntu-latest
+    permissions: {}                        # solo pega con curl a hooks externos, no toca el repo
     needs: e2e                             # ← EL gate: sin e2e verde, ni siquiera se pide aprobación
     environment: production                # ⏸ el reviewer del TP6 sigue ahí
     concurrency: { group: deploy-prod, cancel-in-progress: false }   # la del TP6 §3.4 — si no la agregaste allá, va ahora
