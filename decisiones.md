@@ -503,3 +503,29 @@ Usé Claude Code durante todo este TP, de la misma forma que en el TP6/TP7: ante
 - Me ayudó a redactar esta sección a partir de los comandos y salidas reales de la cursada.
 
 Las decisiones fueron mías: crear la rama `infra-preprod`, los nombres de los recursos (`recetario-preprod`, `recetario_preprod_owner`), generar una `SECRET_KEY` propia para preprod en vez de reusar la de producción, y cómo resolver el incidente del proyecto huérfano (sacar del estado y recrear, en vez de seguir peleando con el bug del provider). Verifiqué cada paso contra el estado real (consola de Neon, dashboard/API de Render, `git status`/`git add -n` antes de cada commit), no contra lo que "debería" haber pasado.
+
+### 2. CodeQL: los 2 findings analizados
+
+Activé CodeQL (default setup, los 3 lenguajes detectados: GitHub Actions, JS/TS, Python). El primer
+análisis terminó con **4 findings**, todos la misma regla: `actions/missing-workflow-permissions`
+(CWE-275, severidad *warning/medium*), en los jobs `deploy-qa`, `integracion`, `e2e` y `deploy-prod`
+de `.github/workflows/ci.yml` — ninguno de los 4 declaraba un bloque `permissions`, así que corrían
+con los permisos default del repo (que no es de solo-lectura siempre: depende de cuándo se creó el
+repo y de si alguien los cambió).
+
+Categoría OWASP: control de acceso/configuración insegura por **exceso de privilegio por defecto**
+— el `GITHUB_TOKEN` de esos jobs podía, en teoría, tener más permiso del que esos jobs usan.
+¿Explotable en mi app? No había una explotación directa a la vista (nadie puede inyectar un paso
+en mi `ci.yml` desde afuera), pero es exactamente la clase de hallazgo que importa por lo que
+*permite si algo más sale mal* — si un step de esos jobs se viera comprometido (una dependencia de
+una action, por ejemplo), el radio de daño queda acotado por lo que ese token puede hacer.
+
+Decisión: **fix real**, no descarte. Miré qué hace cada job:
+- `deploy-qa` y `deploy-prod` solo hacen `curl` a hooks de Render — no tocan el repo ni usan el
+  token → `permissions: {}` (ninguno).
+- `integracion` y `e2e` hacen `checkout` para correr Playwright, pero no escriben nada → les alcanza
+  con `contents: read`.
+
+Con eso, las 4 alertas se cierran con el mínimo permiso real que cada job necesita, en vez de
+aceptar el default implícito.
+
