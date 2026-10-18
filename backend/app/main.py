@@ -47,12 +47,6 @@ def health():
     }
 
 
-@app.get("/api/falla")
-def falla():
-    # TEMPORAL — TP9 §3.5: provoca un error para verlo llegar a Sentry. Sacar después.
-    raise ValueError("Falla de prueba del TP9")
-
-
 @app.get("/api/version")
 def version():
     commit = os.environ.get("RENDER_GIT_COMMIT", "local")
