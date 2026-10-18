@@ -1,11 +1,17 @@
 import os
 from urllib.parse import quote
 
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.openapi.docs import get_swagger_ui_html
 
 from app.database import Base, engine
 from app.routers import auth, ingredients, recipes
+
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN", ""),  # llega por el entorno; vacío = SDK apagado
+    traces_sample_rate=1.0,
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -39,6 +45,12 @@ def health():
         "entorno": entorno,
         "icono": ICONOS_POR_ENTORNO[entorno],
     }
+
+
+@app.get("/api/falla")
+def falla():
+    # TEMPORAL — TP9 §3.5: provoca un error para verlo llegar a Sentry. Sacar después.
+    raise ValueError("Falla de prueba del TP9")
 
 
 @app.get("/api/version")
