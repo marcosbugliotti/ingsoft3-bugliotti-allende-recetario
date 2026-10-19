@@ -417,6 +417,26 @@ Usé Claude Code durante todo este TP, de la misma forma que en el TP6: le iba e
 
 Las decisiones fueron mías: qué romper y dónde (elegí el punto exacto para no pisar el unitario del TP5), qué iba en cada suite y por qué, y qué dejar afuera de cada una por la pirámide. Verifiqué cada paso contra el estado real (corridas de Actions, reportes de Playwright, `vitest run`) antes de darlo por bueno.
 
+### Nota retroactiva — tag `v7.0.1`
+
+Agregado después de cerrado este TP, a pedido del docente: taguié `v7.0.0` sobre el commit `8e0c05b`
+(PR #133, el cierre "oficial" del TP7), pero esa misma tarde y al día siguiente hice dos correcciones
+más sobre ese mismo trabajo, antes de empezar el TP8 — quedaron sin su propio tag:
+
+- **PR #134** (`b68ce5b`, mismo día): refina el mensaje de error de validación agregando el nombre
+  del campo inválido (`"title: Field required"`), porque la versión de `v7.0.0` no distinguía cuál
+  de dos campos había fallado si fallaban los dos a la vez.
+- **PR #135** (`dd8b1ef`, día siguiente): arregla una regresión real que encontré **al aprobar el
+  deploy de `v7.0.0`** — el footer dejó de mostrar el commit porque mis servicios pasan a desplegar
+  por *Existing Image* desde el §3.2 de este mismo TP7, y `RENDER_GIT_COMMIT` dejó de existir. Es la
+  sección "### 10." de arriba, documentada en su momento como parte del TP7, aunque el tag ya
+  estuviera puesto.
+
+Agregué el tag **`v7.0.1`** sobre `dd8b1ef` (que incluye los cambios de `b68ce5b`, al ser su
+descendiente directo) para que el estado congelado del TP7 quede completo — las dos correcciones son
+sobre el mismo trabajo del TP7, encontradas en el proceso de cerrarlo de verdad, no features nuevas
+ni trabajo del TP8.
+
 ## TP8 — Infraestructura como Código
 
 > 📌 Esta sección documenta `infra/` tal como quedó en el commit de este PR. El tag `v8.0.0` se hace sobre un commit posterior, una vez que actualice `image_tag` con la imagen que ya incluye el footer de preprod (§7) — el flujo completo está contado al final de §7.
@@ -504,6 +524,28 @@ Usé Claude Code durante todo este TP, de la misma forma que en el TP6/TP7: ante
 
 Las decisiones fueron mías: crear la rama `infra-preprod`, los nombres de los recursos (`recetario-preprod`, `recetario_preprod_owner`), generar una `SECRET_KEY` propia para preprod en vez de reusar la de producción, y cómo resolver el incidente del proyecto huérfano (sacar del estado y recrear, en vez de seguir peleando con el bug del provider). Verifiqué cada paso contra el estado real (consola de Neon, dashboard/API de Render, `git status`/`git add -n` antes de cada commit), no contra lo que "debería" haber pasado.
 
+## TP9 — DevSecOps + Observabilidad + Continuous Feedback
+
+### 1. Dependabot: el PR que mergeé y por qué
+
+Activé Dependabot en los tres ecosistemas reales del repo (`pip` en `/backend`, no `nuget` como dice
+la guía — mi backend es FastAPI/Python; `npm` en `/frontend`; `github-actions` en `/`), con las
+alertas y las actualizaciones de seguridad prendidas en *Settings → Advanced Security*.
+
+A los minutos del merge aparecieron **17 PRs** de actualización (uno por dependencia con versión
+nueva disponible) — es el comportamiento esperado la primera vez que se activa Dependabot en un
+repo con historia, no un error. De esos 17 mergeé **#141**
+(`chore(deps-dev): bump coverage from 7.16.1 to 7.16.2 in /backend`): es un **patch** de SemVer
+(7.16.**1** → 7.16.**2**, no minor ni major), y es una dependencia de **desarrollo** (`coverage`,
+la herramienta de medición de cobertura de los tests) que no corre en producción — el riesgo de
+romper algo real era mínimo. Mi CI (`build-backend`, `build-frontend`) quedó en verde sobre ese PR,
+así que lo mergeé con esa confianza: ese verde es el mismo pipeline que vengo construyendo desde el
+TP4 (tests, TP5 coverage/gate, TP7 e2e) diciéndome "podés".
+
+Como contraste, dejé sin mergear **#146** (`bump bcrypt from 4.0.1 to 5.0.0`): es un **major**, y
+su `build-backend` **falló** en el propio PR — la prueba en vivo de por qué un major amerita mirar
+el changelog antes de tocarlo, a diferencia del patch que sí mergeé.
+
 ### 2. CodeQL: los 2 findings analizados
 
 Activé CodeQL (default setup, los 3 lenguajes detectados: GitHub Actions, JS/TS, Python). El primer
@@ -529,3 +571,68 @@ Decisión: **fix real**, no descarte. Miré qué hace cada job:
 Con eso, las 4 alertas se cierran con el mínimo permiso real que cada job necesita, en vez de
 aceptar el default implícito.
 
+
+### 3. Monitor externo y Sentry: lo que vi en producción
+
+**Monitor (UptimeRobot) sobre `/health` de prod.** Antes de crear el monitor tuve que arreglar un
+problema que anticipa la guía: mi `/health` solo aceptaba `GET` y devolvía **405** a `HEAD`, el
+método con el que pregunta el plan gratuito de UptimeRobot — lo cambié a `@app.api_route(methods=
+["GET", "HEAD"])`. Con el monitor activo, provoqué una caída real (*Suspend* del servicio de PROD en
+Render): UptimeRobot tardó **5 minutos y 5 segundos** en todo el ciclo DOWN→UP (caída detectada a
+las 17:27:26, resuelta a las 17:32:31 del 16/10), bastante menos que el "hasta 20 minutos" que mide
+la guía — abrí yo mismo el `/health` en el navegador después de reanudar el servicio, y eso despertó
+la base/el servicio más rápido que esperar al próximo chequeo del monitor.
+
+**Sentry: un error real, no el de prueba.** Agregué un endpoint temporal `/api/falla` (ya sacado)
+para generar un error de prueba, pero terminó siendo innecesario: al usar la app real en producción
+(crear una receta con sus ingredientes), me encontré con un error genuino: `OperationalError:
+SSL connection has been closed unexpectedly`, en `app/deps.py` al consultar la tabla `users`,
+durante un `POST /api/ingredients`. La causa: mi `engine` de SQLAlchemy no verificaba si una
+conexión del pool seguía viva antes de reusarla — Neon (mi Postgres gratuito) cierra las conexiones
+inactivas, y SQLAlchemy intentaba reusar una ya muerta. El fix real: `pool_pre_ping=True` en
+`create_engine()`, que descarta y renueva cualquier conexión muerta antes de usarla. Repetí la carga
+de recetas después del fix y `POST /api/recipes` / `POST /api/ingredients` quedaron con *failure
+rate* 0.
+
+**Mi operación más usada y la más lenta** (tabla de *Transactions* del backend en Sentry, con datos
+limpios después del fix): la más usada es `POST /api/ingredients` (se llama una vez por cada
+ingrediente al crear una receta, así que acumula más pedidos que cualquier otro endpoint); la más
+lenta es `POST /api/auth/login`, con **P95 de 1.78s** — mismo fenómeno de cold-start de la base
+gratuita que midió la cátedra sobre su propia app. De ese dato nace la tarjeta que abrí en mi tablero
+del TP3 (issue [#163](https://github.com/marcosbugliotti/ingsoft3-bugliotti-allende-recetario/issues/163)):
+investigar y mitigar la latencia de login por el cold-start de Neon.
+
+### 4. Problemas encontrados y declaración de uso de IA
+
+**Problemas:**
+- Dependabot abrió 17 PRs de una (comportamiento esperado la primera vez, pero inesperado si no se
+  lo lee en la guía con cuidado) — hubo que elegir con criterio cuál mergear, no mergear todas.
+- `/health` no aceptaba `HEAD`, lo que habría hecho que UptimeRobot marcara el servicio como caído
+  estando vivo si no lo hubiera comprobado antes con `curl -I`.
+- El bug real de `OperationalError` (conexión SSL muerta reusada) — encontrado gracias a Sentry, en
+  mi primer intento real de usar la app después de integrarlo, no en un escenario de prueba armado
+  a propósito.
+
+**Uso de IA:** usé Claude Code durante todo este TP, de la misma forma que en los anteriores:
+explicándole qué quería lograr en cada paso y verificando juntos cada resultado real (salidas de
+`curl`, de GitHub Actions, de Render, de Sentry, de UptimeRobot) antes de seguir. Su rol concreto:
+- Adaptó `dependabot.yml` a mi stack real (`pip`, no `nuget` como en la guía, que está escrita sobre
+  .NET).
+- Leyó los 4 findings de CodeQL, los categorizó (CWE-275, exceso de privilegio por defecto) y me
+  propuso el fix mínimo real por job (`permissions: {}` donde no hacía falta nada, `contents: read`
+  donde alcanzaba) en vez de copiar un bloque genérico.
+- Detectó por mi cuenta que `/health` devolvía 405 a `HEAD` *antes* de crear el monitor (lo verificó
+  con `curl -I` contra mi prod), evitando que el monitor arrancara mal configurado desde el día uno.
+- Cuando apareció el `OperationalError` real en Sentry, leyó el stack trace completo, identificó la
+  causa (pool de conexiones sin `pre_ping` contra una base que se suspende) y propuso el fix
+  estándar de SQLAlchemy para ese problema — lo verifiqué repitiendo la carga de recetas en prod y
+  confirmando *failure rate* 0 en la tabla de Sentry después.
+- Me ayudó a interpretar la tabla de *Transactions* de Sentry para elegir, con criterio, qué dato
+  (operación más lenta) valía la pena convertir en una tarjeta real del tablero del TP3, en vez de
+  abrir una tarjeta genérica.
+- Redactó esta sección a partir de los datos y las salidas reales de la cursada (horarios del
+  incidente de UptimeRobot, P95 de Sentry, número de PRs de Dependabot).
+
+Las decisiones fueron mías: qué PR de Dependabot mergear y por qué, cuándo suspender/reanudar el
+servicio de PROD para la demo del monitor, usar el error real en vez de forzar solo el de prueba, y
+qué dato de Sentry merecía convertirse en tarjeta del tablero en vez de otro.
