@@ -1,3 +1,5 @@
+from collections import Counter
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
@@ -64,6 +66,24 @@ def _build_recipe_out(recipe: Recipe, servings_requested: int, user: User | None
 
 
 def _sync_ingredients(db: Session, recipe: Recipe, items: list) -> None:
+    counts = Counter(item.ingredient_id for item in items)
+    repetidos = [ingredient_id for ingredient_id, n in counts.items() if n > 1]
+    if repetidos:
+        nombres = [
+            ingredient.name
+            for ingredient_id in repetidos
+            if (ingredient := db.get(Ingredient, ingredient_id)) is not None
+        ]
+        detalle = ", ".join(nombres) if nombres else ", ".join(str(i) for i in repetidos)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No se puede repetir el mismo ingrediente en una receta: {detalle}",
+        )
+    if len(items) > 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Una receta no puede tener más de 50 ingredientes",
+        )
     recipe.ingredient_links.clear()
     db.flush()
     for item in items:
@@ -73,9 +93,22 @@ def _sync_ingredients(db: Session, recipe: Recipe, items: list) -> None:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Ingrediente {item.ingredient_id} no existe",
             )
+        if item.quantity_base > 100_000:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"La cantidad de {ingredient.name} no puede superar 100.000",
+            )
         recipe.ingredient_links.append(
             RecipeIngredient(ingredient_id=ingredient.id, quantity_base=item.quantity_base)
         )
+
+
+def _meets_publish_requirements(recipe: Recipe) -> bool:
+    return (
+        bool(recipe.title.strip())
+        and recipe.prep_time_minutes > 0
+        and len(recipe.ingredient_links) >= 1
+    )
 
 
 def _check_title_unique(
@@ -130,6 +163,11 @@ def create_recipe(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    if len(data.title) > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El título no puede superar los 200 caracteres",
+        )
     _check_title_unique(db, user.id, data.title)
     recipe = Recipe(
         title=data.title,
@@ -173,6 +211,11 @@ def update_recipe(
     recipe.servings_base = data.servings_base
     recipe.prep_time_minutes = data.prep_time_minutes
     _sync_ingredients(db, recipe, data.ingredients)
+    # Regla de negocio: si la edición deja una receta pública sin cumplir los
+    # requisitos mínimos (título, tiempo, al menos un ingrediente), se despublica
+    # sola en vez de quedar visible para otros usuarios en un estado inválido.
+    if recipe.is_public and not _meets_publish_requirements(recipe):
+        recipe.is_public = False
     db.commit()
     db.refresh(recipe)
     return _build_recipe_out(recipe, recipe.servings_base, user)
@@ -196,6 +239,12 @@ def publish_recipe(
     user: User = Depends(get_current_user),
 ):
     recipe = _owned_or_403(db.get(Recipe, recipe_id), user)
+    # Regla de negocio: no tiene sentido volver a publicar algo que ya está público.
+    if recipe.is_public:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La receta ya está publicada",
+        )
     # Regla de negocio: validación + transición de estado — solo pasa a pública si
     # cumple los requisitos mínimos para ser cocinada por otra persona.
     if not recipe.title.strip():
